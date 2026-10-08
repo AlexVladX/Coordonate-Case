@@ -613,12 +613,17 @@ function statusLabel(s) {
   return ['badge-new', 'Nevizitat'];
 }
 
-function copyCoords(lat, lng) {
-  const text = lat + ', ' + lng;
-  if (navigator.clipboard) {
-    navigator.clipboard.writeText(text).then(() => alert('Coordonate copiate: ' + text));
+/* Copiază linkul Google Maps al locației (un pin pe hartă), bun de trimis mai departe */
+function copyLink(btn, lat, lng) {
+  const link = 'https://www.google.com/maps/search/?api=1&query=' + lat + ',' + lng;
+  const gata = () => {
+    btn.textContent = '✓ Copiat';
+    setTimeout(() => { btn.textContent = 'Copiază link'; }, 1500);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(link).then(gata, () => prompt('Copiază linkul:', link));
   } else {
-    prompt('Copiază coordonatele:', text);
+    prompt('Copiază linkul:', link);
   }
 }
 
@@ -655,7 +660,7 @@ function render(list) {
       '<div class="card-actions">' +
         '<a class="btn-nav btn-gm" href="' + gmUrl + '">Google Maps</a>' +
         '<a class="btn-nav btn-waze" href="' + wazeUrl + '">Waze</a>' +
-        '<button class="btn-nav btn-copy" onclick="copyCoords(' + c.lat + ',' + c.lng + ')">Copiază GPS</button>' +
+        '<button class="btn-nav btn-copy" onclick="copyLink(this,' + c.lat + ',' + c.lng + ')">Copiază link</button>' +
       '</div>' +
       (c.tel ? '<div class="card-actions">' + telHtml + '</div>' : '') +
       (c.local || SCRIPT_URL ? '<div class="card-edit">' +
