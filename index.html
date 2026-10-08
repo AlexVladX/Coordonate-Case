@@ -36,7 +36,8 @@
   .btn-gm { background: #E6F1FB; color: #0C447C; border-color: #85B7EB; }
   .btn-waze { background: #EAF3DE; color: #1E5C0E; border-color: #97C459; }
   .btn-copy { background: #f5f5f0; color: #5f5e5a; border-color: #d3d1c7; font-size: 13px; }
-  .coords { font-size: 11px; color: #b4b2a9; }
+  .coords { font-size: 12px; color: #8a887f; cursor: pointer; display: inline-block; padding: 6px 0; -webkit-tap-highlight-color: transparent; text-decoration: underline dotted; text-underline-offset: 3px; }
+  .coords.copiat { color: #27500A; font-weight: 600; text-decoration: none; }
   .no-results { text-align: center; padding: 40px 20px; color: #73726c; }
   .add-panel { scroll-margin-top: 122px; background: #fff; border-bottom: 1px solid #e5e3da; padding: 10px 16px; }
   .add-toggle { width: 100%; padding: 10px; border-radius: 10px; border: 1px dashed #85B7EB; background: #E6F1FB; color: #0C447C; font-size: 15px; font-weight: 600; cursor: pointer; }
@@ -344,20 +345,21 @@ function coordDinText(text) {
 /* Linkurile de tip „loc” nu conțin coordonate, ci identificatorul locului (0x...:0x...).
    Din el se poate calcula poziția cu o precizie de câteva zeci de metri. */
 function coordDinFtid(hex) {
-  let id;
-  try { id = BigInt(hex); } catch (e) { return null; }
-  if (id <= 0n || id >= (1n << 64n)) return null;
-  const fata = Number(id >> 61n);
-  if (fata > 5) return null;
-  let tz = 0;
-  while (((id >> BigInt(tz)) & 1n) === 0n) tz++;
-  const nivel = 30 - (tz >> 1);
+  let h = String(hex || '').replace(/^0x/i, '').toLowerCase();
+  if (!/^[0-9a-f]{1,16}$/.test(h)) return null;
+  while (h.length < 16) h = '0' + h;
+  let biti = '';
+  for (let c = 0; c < 16; c++) biti += ('000' + parseInt(h.charAt(c), 16).toString(2)).slice(-4);
+  const fata = parseInt(biti.slice(0, 3), 2);
+  const ultim = biti.lastIndexOf('1');
+  if (fata > 5 || ultim < 0) return null;
+  const nivel = 30 - ((63 - ultim) >> 1);
   if (nivel < 20) return null;                       // celula prea mare ca sa fie utila
   const POS_IJ = [[0, 1, 3, 2], [0, 2, 3, 1], [3, 2, 0, 1], [3, 1, 0, 2]];
   const POS_OR = [1, 0, 0, 3];
   let i = 0, j = 0, orient = fata & 1;
   for (let k = 0; k < nivel; k++) {
-    const pos = Number((id >> BigInt(2 * (29 - k) + 1)) & 3n);
+    const pos = parseInt(biti.substr(3 + 2 * k, 2), 2);
     const ij = POS_IJ[orient][pos];
     i = i * 2 + (ij >> 1); j = j * 2 + (ij & 1);
     orient ^= POS_OR[pos];
@@ -676,6 +678,21 @@ function copyLink(btn, lat, lng) {
   }
 }
 
+/* Apăsarea pe coordonate le copiază ca text: „lat, lng” */
+function copyCoords(el, lat, lng) {
+  const text = lat + ', ' + lng;
+  const gata = () => {
+    el.textContent = '✓ Coordonate copiate';
+    el.classList.add('copiat');
+    setTimeout(() => { el.textContent = '' + text; el.classList.remove('copiat'); }, 1500);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(gata, () => prompt('Copiază coordonatele:', text));
+  } else {
+    prompt('Copiază coordonatele:', text);
+  }
+}
+
 function render(list) {
   const el = document.getElementById('cardList');
   const n = list.length;
@@ -716,7 +733,7 @@ function render(list) {
         '<button class="btn-nav btn-copy btn-edit" onclick="editCasa(' + i + ')">✎ Editează</button>' +
         (c.local || c.app ? '<button class="btn-nav btn-del" onclick="deleteCasa(\'' + esc(c.id) + '\')">' + (seSterge ? 'Se șterge…' : 'Șterge') + '</button>' : '') +
       '</div>' : '') +
-      '<div class="coords">' + c.lat + ', ' + c.lng + '</div>' +
+      '<div><span class="coords" role="button" title="Apasă pentru a copia coordonatele" onclick="copyCoords(this,' + c.lat + ',' + c.lng + ')">' + c.lat + ', ' + c.lng + '</span></div>' +
     '</div>';
   }).join('');
 }
