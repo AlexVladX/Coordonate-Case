@@ -64,13 +64,32 @@
   .form-error { font-size: 13px; color: #A32D2D; display: none; }
   .form-actions { display: flex; gap: 8px; }
   .btn-save { background: #185FA5; color: #fff; border-color: #185FA5; }
-  .card-edit { display: flex; gap: 8px; margin-bottom: 8px; }
+  .card-edit { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
   .btn-edit { flex: none; font-size: 13px; padding: 7px 14px; }
   .edit-title { font-size: 14px; font-weight: 600; color: #0C447C; display: none; }
   .btn-del { padding: 7px 14px; flex: none; background: #FCEBEB; color: #A32D2D; border-color: #F09595; font-size: 13px; }
   .form-ok { font-size: 13px; color: #27500A; background: #EAF3DE; border-radius: 8px; padding: 8px 10px; margin-top: 10px; display: none; }
   .btn-save:disabled { opacity: .6; cursor: default; }
-  .badge-app { background: #E1F5EE; color: #085041; }
+  .badge-manual { background: #E1F5EE; color: #085041; }
+  .badge-direct { background: #E6F1FB; color: #0C447C; }
+  .badge-modificat { background: #FAEEDA; color: #633806; }
+  .badge-asteptare { background: #F1EFE8; color: #444441; }
+  .badge-eroare { background: #FCEBEB; color: #A32D2D; }
+  .card-err { font-size: 12px; color: #A32D2D; margin-bottom: 8px; }
+  .coada-bar { display: none; align-items: center; gap: 10px; font-size: 13px; color: #633806; background: #FAEEDA; border-radius: 8px; padding: 8px 10px; margin-top: 10px; }
+  .coada-bar span { flex: 1; }
+  .coada-bar button { flex: none; padding: 6px 10px; border-radius: 8px; border: 1px solid #EF9F27; background: #fff; color: #633806; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .count { display: flex; align-items: center; gap: 8px; }
+  .count-text { flex: 1; min-width: 0; }
+  .btn-harta { flex: none; padding: 6px 12px; border-radius: 20px; border: 1px solid #d3d1c7; background: #fff; color: #1a1a18; font-size: 13px; font-weight: 500; cursor: pointer; }
+  .btn-harta.activ { background: #E6F1FB; color: #0C447C; border-color: #85B7EB; }
+  #mapWrap { display: none; padding: 8px 16px 24px; position: relative; }
+  #map { height: calc(100vh - 210px); min-height: 320px; border-radius: 14px; border: 1px solid #e5e3da; background: #e9e7df; z-index: 0; }
+  #mapMsg { display: none; text-align: center; padding: 40px 20px; color: #73726c; }
+  .btn-pozitie { position: absolute; right: 26px; bottom: 44px; z-index: 5; padding: 9px 12px; border-radius: 10px; border: 1px solid #d3d1c7; background: #fff; font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,.2); }
+  .pop-nume { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+  .pop-note { font-size: 12px; color: #5f5e5a; white-space: pre-wrap; margin-bottom: 6px; max-height: 90px; overflow: auto; }
+  .pop-links a { font-weight: 600; margin-right: 10px; }
   .badge-local { background: #EEEDFE; color: #3C3489; }
 </style>
 </head>
@@ -134,9 +153,15 @@
     </div>
   </form>
   <div class="form-ok" id="formOk"></div>
+  <div class="coada-bar" id="coadaBar"><span id="coadaText"></span><button type="button" id="coadaBtn" onclick="trimiteCoada(true)">Trimite acum</button></div>
 </div>
 
-<div class="count"><span id="countLabel"></span><span id="syncLabel"></span></div>
+<div class="count"><span class="count-text"><span id="countLabel"></span><span id="syncLabel"></span></span><button type="button" class="btn-harta" id="btnHarta" onclick="comutaHarta()">Hartă</button></div>
+<div id="mapWrap">
+  <div id="map"></div>
+  <div id="mapMsg"></div>
+  <button type="button" class="btn-pozitie" id="btnPozitie" onclick="pozitiaMea()">📍 Poziția mea</button>
+</div>
 <div class="list" id="cardList"></div>
 
 <script>
@@ -239,6 +264,7 @@ async function incarca() {
   }
   seIncarca = false;
   filterCards();
+  trimiteCoada();
 }
 
 /* ================================================ */
@@ -263,7 +289,135 @@ function saveLocale() {
   catch (e) { return false; }
 }
 
-function toateCasele() { return caseLocale.concat(case_); }
+/* ================================================
+   COADA DE MODIFICĂRI
+   Adăugările și editările se pun întâi aici, pe telefon, și apar imediat în listă.
+   De aici pleacă spre Google Sheet; dacă nu e semnal, rămân în așteptare
+   și se trimit singure când revine conexiunea.
+   ================================================ */
+
+const COADA_KEY = 'coordonate-case-coada';
+let coada = loadCoada();
+let seTrimite = false;     // o trimitere este în curs
+let opInZbor = null;       // modificarea aflată chiar acum pe drum
+let pinAnulat = false;     // utilizatorul a închis fereastra de PIN
+
+function loadCoada() {
+  try {
+    const v = JSON.parse(localStorage.getItem(COADA_KEY) || '[]');
+    return Array.isArray(v) ? v : [];
+  } catch (e) { return []; }
+}
+
+function saveCoada() {
+  try { localStorage.setItem(COADA_KEY, JSON.stringify(coada)); return true; }
+  catch (e) { return false; }
+}
+
+function acelasiNume(a, b) { return String(a == null ? '' : a).trim() === String(b == null ? '' : b).trim(); }
+
+/* Lista afișată = lista din Google Sheet + modificările care încă așteaptă */
+function toateCasele() {
+  const editari = coada.filter(o => o.tip === 'update');
+  const lista = case_.map(c => {
+    const o = editari.find(o => String(o.id) === String(c.id) && acelasiNume(o.numeVechi, c.nume));
+    return o ? Object.assign({}, c, { nume: o.nume, lat: o.lat, lng: o.lng, note: o.note, _op: o, _srv: c })
+             : Object.assign({}, c, { _srv: c });
+  });
+  coada.filter(o => o.tip === 'add').forEach(o => {
+    lista.push({ id: o.k, nume: o.nume, lat: o.lat, lng: o.lng, note: o.note, app: true, _op: o });
+  });
+  return caseLocale.concat(lista);
+}
+
+function actualizeazaBara() {
+  const bara = document.getElementById('coadaBar');
+  const erori = coada.filter(o => o.eroare).length;
+  const rest = coada.length - erori;
+  if (!coada.length) { bara.style.display = 'none'; return; }
+  const m = n => n + (n === 1 ? ' modificare' : ' modificări');
+  let text;
+  if (seTrimite) text = 'Se trimit ' + m(rest || coada.length) + ' în Google Sheet…';
+  else if (rest) text = m(rest) + (rest === 1 ? ' așteaptă' : ' așteaptă') + ' semnal ca să ajungă în Google Sheet.';
+  else text = m(erori) + (erori === 1 ? ' nu a putut fi trimisă' : ' nu au putut fi trimise') + '. Vezi cardul marcat „Netrimis”.';
+  document.getElementById('coadaText').textContent = text;
+  document.getElementById('coadaBtn').style.display = (!seTrimite && rest) ? '' : 'none';
+  bara.style.display = 'flex';
+}
+
+async function trimiteCoada(manual) {
+  if (!SCRIPT_URL || seTrimite) return;
+  if (manual) pinAnulat = false;
+  if (pinAnulat) return;
+  seTrimite = true;
+  actualizeazaBara();
+  try {
+    for (;;) {
+      const op = coada.find(o => !o.eroare);
+      if (!op) break;
+      opInZbor = op;
+      modificari++;
+      filterCards();
+      const date = { nume: op.nume, lat: op.lat, lng: op.lng, note: op.note };
+      let r;
+      try {
+        r = await apel(Object.assign(op.tip === 'add' ? { action: 'add' } : { action: 'update', id: op.id, numeVechi: op.numeVechi }, date));
+      } catch (e) {
+        opInZbor = null;
+        if (e.retea) {
+          showOk('„' + op.nume + '” e salvată pe telefon și se trimite singură când revine semnalul.');
+          break;
+        }
+        if (e.anulat) { pinAnulat = true; break; }
+        if (op.tip === 'update' && e.code === 'notfound') {
+          coada = coada.filter(o => o !== op);
+          saveCoada();
+          showOk('Modificarea pentru „' + op.nume + '” nu a putut fi aplicată: casa nu mai există în Google Sheet sau a fost redenumită de pe alt dispozitiv.');
+          continue;
+        }
+        op.eroare = e.code === 'Actiune necunoscuta.' ? 'Scriptul din Google Sheet trebuie actualizat.' : e.message;
+        saveCoada();
+        continue;
+      }
+      modificari++;
+      if (op.tip === 'add') {
+        case_.push(r.casa);
+      } else {
+        const srv = case_.find(c => String(c.id) === String(op.id) && acelasiNume(c.nume, op.numeVechi));
+        if (srv) {
+          Object.assign(srv, date);
+          srv.modificat = r.modificat !== undefined ? !!r.modificat : true;
+        }
+      }
+      coada = coada.filter(o => o !== op);
+      opInZbor = null;
+      saveCoada();
+      scrieCache();
+      showOk('✓ „' + op.nume + '” a ajuns în Google Sheet.');
+    }
+  } finally {
+    seTrimite = false;
+    opInZbor = null;
+    actualizeazaBara();
+    filterCards();
+  }
+}
+
+/* Renunță la o modificare care nu a fost încă trimisă */
+function renuntaOp(k) {
+  const op = coada.find(o => o.k === k);
+  if (!op) return;
+  if (op === opInZbor) { showOk('Modificarea se trimite chiar acum și nu mai poate fi oprită.'); return; }
+  if (!confirm(op.tip === 'add' ? 'Renunți la „' + op.nume + '”? Nu a fost încă trimisă în Google Sheet.' : 'Renunți la modificarea pentru „' + op.nume + '”? Casa rămâne cum era.')) return;
+  coada = coada.filter(o => o !== op);
+  saveCoada();
+  actualizeazaBara();
+  filterCards();
+}
+
+window.addEventListener('online', () => trimiteCoada());
+document.addEventListener('visibilitychange', () => { if (!document.hidden) trimiteCoada(); });
+setInterval(() => { if (coada.some(o => !o.eroare)) trimiteCoada(); }, 30000);
 
 function esc(v) {
   return String(v == null ? '' : v).replace(/[&<>"']/g, ch =>
@@ -286,19 +440,26 @@ function setPin(v) { try { localStorage.setItem(PIN_KEY, v); } catch (e) {} }
 async function apel(data, pinGresit) {
   data.pin = getPin();
   let d;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 25000);
   try {
     const res = await fetch(SCRIPT_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(data)
+      body: JSON.stringify(data),
+      signal: ctrl.signal
     });
     d = await res.json();
   } catch (e) {
-    throw new Error('Nu am putut contacta Google Sheet. Verifică conexiunea la internet.');
+    const er = new Error('Nu am putut contacta Google Sheet. Verifică conexiunea la internet.');
+    er.retea = true;
+    throw er;
+  } finally {
+    clearTimeout(timer);
   }
   if (d.error === 'pin') {
     const p = prompt(pinGresit ? 'Cod greșit. Încearcă din nou:' : 'Introdu codul PIN pentru modificări:');
-    if (p === null) throw new Error('Operațiune anulată.');
+    if (p === null) { const er = new Error('Operațiune anulată.'); er.anulat = true; throw er; }
     setPin(p.trim());
     return apel(data, true);
   }
@@ -495,6 +656,7 @@ function golesteFormular() {
 function editCasa(i) {
   const c = vizibile[i];
   if (!c) return;
+  if (c._op && c._op === opInZbor) { showOk('„' + c.nume + '” se trimite chiar acum. Încearcă din nou în câteva secunde.'); return; }
   golesteFormular();
   inEditare = c;
   document.getElementById('fNume').value = c.nume || '';
@@ -546,40 +708,35 @@ async function saveCasa(ev) {
   if (!isFinite(lng) || lng < -180 || lng > 180) { showError('Longitudine invalidă (între -180 și 180).'); return; }
 
   const editata = inEditare;
-  const textButon = editata ? 'Salvează modificările' : 'Salvează';
+  const date = { nume: nume, lat: lat, lng: lng, note: note };
   let mesaj;
 
   if (editata && editata.local) {
-    Object.assign(editata, { nume: nume, lat: lat, lng: lng, note: note });
+    const loc = caseLocale.find(x => x.id === editata.id);
+    if (loc) Object.assign(loc, date);
     if (!saveLocale()) { showError('Modificarea nu a putut fi salvată în browser (stocare blocată).'); return; }
     mesaj = '✓ „' + nume + '” a fost modificată pe acest dispozitiv.';
   } else if (SCRIPT_URL) {
-    const btn = document.getElementById('btnSave');
-    btn.disabled = true; btn.textContent = 'Se salvează...';
-    modificari++;
-    try {
-      if (editata) {
-        await apel({ action: 'update', id: editata.id, numeVechi: editata.nume, nume: nume, lat: lat, lng: lng, note: note });
-        modificari++;
-        Object.assign(editata, { nume: nume, lat: lat, lng: lng, note: note });
-        mesaj = '✓ „' + nume + '” a fost modificată în Google Sheet.';
-      } else {
-        const d = await apel({ action: 'add', nume: nume, lat: lat, lng: lng, note: note });
-        modificari++;
-        case_.push(d.casa);
-        mesaj = '✓ „' + nume + '” a fost salvată în Google Sheet.';
-      }
-      scrieCache();
-    } catch (e) {
-      showError(e.code === 'notfound' ? 'Casa nu mai există în Google Sheet sau a fost redenumită de pe alt dispozitiv. Apasă „Reîncarcă” și încearcă din nou.'
-        : e.code === 'Actiune necunoscuta.' ? 'Scriptul din Google Sheet trebuie actualizat ca să permită editarea.'
-        : e.message);
-      return;
-    } finally {
-      btn.disabled = false; btn.textContent = textButon;
+    const cheie = 'op-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
+    if (editata && editata._op) {
+      /* Casa are deja o modificare netrimisă: o completăm pe aceea */
+      if (editata._op === opInZbor) { showError('Această casă se trimite chiar acum. Încearcă din nou în câteva secunde.'); return; }
+      Object.assign(editata._op, date);
+      delete editata._op.eroare;
+    } else if (editata) {
+      const srv = editata._srv;
+      const schimbat = !acelasiNume(srv.nume, nume) || Number(srv.lat) !== lat || Number(srv.lng) !== lng || !acelasiNume(srv.note, note);
+      if (!schimbat) { golesteFormular(); toggleForm(false); showOk('Nicio modificare de salvat.'); return; }
+      coada.push(Object.assign({ k: cheie, tip: 'update', id: srv.id, numeVechi: String(srv.nume == null ? '' : srv.nume).trim() }, date));
+    } else {
+      coada.push(Object.assign({ k: cheie, tip: 'add' }, date));
     }
+    if (!saveCoada()) {
+      showError('Nu am putut păstra modificarea pe telefon (stocare blocată). Lasă formularul deschis până se trimite.');
+    }
+    mesaj = '„' + nume + '” e salvată pe telefon. Se trimite în Google Sheet…';
   } else {
-    caseLocale.unshift({ id: 'local-' + Date.now(), nume: nume, lat: lat, lng: lng, note: note, local: true });
+    caseLocale.unshift(Object.assign({ id: 'local-' + Date.now(), local: true }, date));
     if (!saveLocale()) { showError('Casa nu a putut fi salvată în browser (stocare blocată).'); filterCards(); return; }
     mesaj = '✓ „' + nume + '” a fost salvată pe acest dispozitiv.';
   }
@@ -588,6 +745,7 @@ async function saveCasa(ev) {
   toggleForm(false);
   showOk(mesaj);
   filterCards();
+  if (SCRIPT_URL) { actualizeazaBara(); trimiteCoada(true); }
 }
 
 async function deleteCasa(id) {
@@ -599,9 +757,14 @@ async function deleteCasa(id) {
     filterCards();
     return;
   }
+  /* O casă adăugată dar încă netrimisă: ștergerea înseamnă doar renunțare */
+  if (coada.some(o => o.tip === 'add' && o.k === id)) { renuntaOp(id); return; }
+
   const c = case_.find(x => String(x.id) === String(id));
   const cheie = String(id);
   if (!c || inStergere.has(cheie)) return;
+  const inAsteptare = coada.find(o => o.tip === 'update' && String(o.id) === cheie && acelasiNume(o.numeVechi, c.nume));
+  if (inAsteptare && inAsteptare === opInZbor) { showOk('„' + c.nume + '” se trimite chiar acum. Încearcă din nou în câteva secunde.'); return; }
   if (!confirm('Ștergi „' + c.nume + '” din Google Sheet? Dispare de pe toate dispozitivele.')) return;
 
   const scoate = mesaj => {
@@ -611,6 +774,7 @@ async function deleteCasa(id) {
     showOk(mesaj);
   };
 
+  if (inAsteptare) { coada = coada.filter(o => o !== inAsteptare); saveCoada(); actualizeazaBara(); }
   inStergere.add(cheie);
   modificari++;
   filterCards();
@@ -628,7 +792,7 @@ async function deleteCasa(id) {
 }
 
 document.getElementById('modeHint').textContent = SCRIPT_URL
-  ? 'Casa se salvează în Google Sheet și apare pe toate dispozitivele.'
+  ? 'Casa se salvează în Google Sheet și apare pe toate dispozitivele. Fără semnal, rămâne pe telefon și se trimite când revine conexiunea.'
   : 'Neconectat la Google Sheet: casa se salvează doar pe acest dispozitiv.';
 
 /* ================================================ */
@@ -678,6 +842,117 @@ function copyLink(btn, lat, lng) {
   }
 }
 
+/* Trimite tot ce trebuie pentru o casă: nume, notițe și linkul Google Maps.
+   Pe telefon deschide meniul de distribuire (WhatsApp, Mesaje, e-mail…);
+   pe calculator copiază textul. */
+function trimiteCasa(i, btn) {
+  const c = vizibile[i];
+  if (!c) return;
+  const text = [String(c.nume || '').trim(), String(c.note || '').trim(),
+    'https://www.google.com/maps/search/?api=1&query=' + c.lat + ',' + c.lng].filter(Boolean).join('\n');
+  if (navigator.share) {
+    navigator.share({ text: text }).catch(() => {});
+    return;
+  }
+  const gata = () => { btn.textContent = '✓ Copiat'; setTimeout(() => { btn.textContent = '↗ Trimite'; }, 1500); };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(gata, () => prompt('Copiază textul:', text));
+  } else {
+    prompt('Copiază textul:', text);
+  }
+}
+
+/* ================================================
+   HARTĂ
+   Se încarcă doar când o deschizi și are nevoie de internet.
+   Arată aceleași case ca lista, deci ține cont de căutare.
+   ================================================ */
+
+let hartaActiva = false, harta = null, stratPin = null, stratEu = null, leafletP = null;
+
+function incarcaLeaflet() {
+  if (window.L) return Promise.resolve();
+  if (leafletP) return leafletP;
+  leafletP = new Promise((ok, err) => {
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+    document.head.appendChild(css);
+    const js = document.createElement('script');
+    js.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    js.onload = () => ok();
+    js.onerror = () => { leafletP = null; js.remove(); css.remove(); err(new Error('fara retea')); };
+    document.head.appendChild(js);
+  });
+  return leafletP;
+}
+
+function mesajHarta(text) {
+  document.getElementById('mapMsg').textContent = text;
+  document.getElementById('mapMsg').style.display = text ? 'block' : 'none';
+  document.getElementById('map').style.display = text ? 'none' : 'block';
+  document.getElementById('btnPozitie').style.display = text ? 'none' : '';
+}
+
+async function comutaHarta() {
+  hartaActiva = !hartaActiva;
+  const btn = document.getElementById('btnHarta');
+  btn.textContent = hartaActiva ? 'Listă' : 'Hartă';
+  btn.classList.toggle('activ', hartaActiva);
+  document.getElementById('mapWrap').style.display = hartaActiva ? 'block' : 'none';
+  document.getElementById('cardList').style.display = hartaActiva ? 'none' : '';
+  if (!hartaActiva) return;
+
+  mesajHarta('Se încarcă harta…');
+  try { await incarcaLeaflet(); }
+  catch (e) { mesajHarta('Harta are nevoie de internet. Încearcă din nou când ai semnal; lista rămâne disponibilă.'); return; }
+  if (!hartaActiva) return;
+  mesajHarta('');
+  if (!harta) {
+    harta = L.map('map', { zoomControl: true });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19, attribution: '&copy; OpenStreetMap'
+    }).addTo(harta);
+    stratPin = L.layerGroup().addTo(harta);
+    stratEu = L.layerGroup().addTo(harta);
+    harta.on('locationfound', ev => {
+      stratEu.clearLayers();
+      L.circleMarker(ev.latlng, { radius: 8, color: '#fff', weight: 2, fillColor: '#D85A30', fillOpacity: 1 }).addTo(stratEu).bindPopup('Ești aici');
+    });
+    harta.on('locationerror', () => { document.getElementById('btnPozitie').textContent = 'Poziție indisponibilă'; });
+  }
+  harta.invalidateSize();
+  deseneazaPinuri(true);
+}
+
+function deseneazaPinuri(incadreaza) {
+  if (!harta) return;
+  stratPin.clearLayers();
+  const puncte = [];
+  vizibile.forEach(c => {
+    const lat = Number(c.lat), lng = Number(c.lng);
+    if (!coordValide(lat, lng)) return;
+    puncte.push([lat, lng]);
+    const html = '<div class="pop-nume">' + esc(c.nume) + '</div>' +
+      (c.note ? '<div class="pop-note">' + esc(c.note) + '</div>' : '') +
+      '<div class="pop-links">' +
+        '<a href="https://www.google.com/maps/dir/?api=1&destination=' + lat + ',' + lng + '">Google Maps</a>' +
+        '<a href="https://waze.com/ul?ll=' + lat + '%2C' + lng + '&navigate=yes">Waze</a>' +
+      '</div>';
+    L.circleMarker([lat, lng], { radius: 8, color: '#fff', weight: 2, fillColor: '#185FA5', fillOpacity: 1 })
+      .addTo(stratPin).bindPopup(html);
+  });
+  if (!incadreaza || !puncte.length) return;
+  if (puncte.length === 1) harta.setView(puncte[0], 16);
+  else harta.fitBounds(puncte, { padding: [30, 30], maxZoom: 17 });
+}
+
+function pozitiaMea() {
+  if (!harta) return;
+  document.getElementById('btnPozitie').textContent = '📍 Poziția mea';
+  harta.locate({ setView: true, maxZoom: 15, enableHighAccuracy: true });
+}
+
 /* Apăsarea pe coordonate le copiază ca text: „lat, lng” */
 function copyCoords(el, lat, lng) {
   const text = lat + ', ' + lng;
@@ -693,20 +968,33 @@ function copyCoords(el, lat, lng) {
   }
 }
 
+/* Eticheta arată ultima operațiune asupra casei:
+   Modificat = editată din aplicație · Manual = adăugată din aplicație · Direct = scrisă în Google Sheet */
+function eticheta(c) {
+  if (c.local) return ['badge-local', 'Doar pe acest dispozitiv'];
+  if (c._op && c._op.eroare) return ['badge-eroare', 'Netrimis'];
+  if (c._op) return ['badge-asteptare', c._op === opInZbor ? 'Se trimite…' : 'În așteptare'];
+  if (c.modificat) return ['badge-modificat', 'Modificat'];
+  if (c.app) return ['badge-manual', 'Manual'];
+  return ['badge-direct', 'Direct'];
+}
+
 function render(list) {
   const el = document.getElementById('cardList');
   const n = list.length;
   document.getElementById('subtitle').textContent = toateCasele().length + ' locații';
   document.getElementById('countLabel').textContent = 'Se afișează ' + n + ' locați' + (n === 1 ? 'e' : 'i');
 
+  vizibile = list;
+  if (hartaActiva) deseneazaPinuri(true);
+
   if (n === 0) {
     el.innerHTML = '<div class="no-results">' + (seIncarca && !toateCasele().length ? 'Se încarcă lista…' : 'Nicio locație găsită.') + '</div>';
     return;
   }
 
-  vizibile = list;
   el.innerHTML = list.map((c, i) => {
-    const [badgeClass, badgeText] = c.local ? ['badge-local', 'Doar pe acest dispozitiv'] : c.app ? ['badge-app', 'Adăugată din aplicație'] : statusLabel(c.status || 'new');
+    const [badgeClass, badgeText] = eticheta(c);
     const gmUrl  = 'https://www.google.com/maps/dir/?api=1&destination=' + c.lat + ',' + c.lng;
     const wazeUrl = 'https://waze.com/ul?ll=' + c.lat + '%2C' + c.lng + '&navigate=yes';
     const telHtml = c.tel ? '<a href="tel:' + c.tel + '" class="btn-nav btn-copy" style="flex:none;padding:9px 12px;">📞 ' + c.tel + '</a>' : '';
@@ -723,6 +1011,7 @@ function render(list) {
         (c.pret ? '<span>Preț: <strong>' + c.pret + '</strong></span>' : '') +
       '</div>' : '') +
       (c.note ? '<div class="card-note" style="white-space:pre-wrap">' + esc(c.note) + '</div>' : '') +
+      (c._op && c._op.eroare ? '<div class="card-err">Nu a putut fi trimisă: ' + esc(c._op.eroare) + ' Editează și salvează din nou, sau renunță.</div>' : '') +
       '<div class="card-actions">' +
         '<a class="btn-nav btn-gm" href="' + gmUrl + '">Google Maps</a>' +
         '<a class="btn-nav btn-waze" href="' + wazeUrl + '">Waze</a>' +
@@ -731,6 +1020,8 @@ function render(list) {
       (c.tel ? '<div class="card-actions">' + telHtml + '</div>' : '') +
       (c.local || SCRIPT_URL ? '<div class="card-edit">' +
         '<button class="btn-nav btn-copy btn-edit" onclick="editCasa(' + i + ')">✎ Editează</button>' +
+        '<button class="btn-nav btn-copy btn-edit" onclick="trimiteCasa(' + i + ', this)">↗ Trimite</button>' +
+        (c._op && c._op.tip === 'update' ? '<button class="btn-nav btn-copy btn-edit" onclick="renuntaOp(\'' + esc(c._op.k) + '\')">Renunță</button>' : '') +
         (c.local || c.app ? '<button class="btn-nav btn-del" onclick="deleteCasa(\'' + esc(c.id) + '\')">' + (seSterge ? 'Se șterge…' : 'Șterge') + '</button>' : '') +
       '</div>' : '') +
       '<div><span class="coords" role="button" title="Apasă pentru a copia coordonatele" onclick="copyCoords(this,' + c.lat + ',' + c.lng + ')">' + c.lat + ', ' + c.lng + '</span></div>' +
@@ -739,6 +1030,7 @@ function render(list) {
 }
 
 filterCards();
+actualizeazaBara();
 incarca();
 
 /* Reîncarcă pagina cu ultima versiune de pe server și cu lista la zi.
