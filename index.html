@@ -157,7 +157,7 @@
     <div class="form-hint" id="modeHint"></div>
     <div class="form-error" id="formError"></div>
     <div class="form-actions">
-      <button type="button" class="btn-nav btn-copy" onclick="useMyLocation()">📍 Locația mea</button>
+      <button type="button" class="btn-nav btn-copy" id="btnLocatie" onclick="useMyLocation()">📍 Locația mea</button>
       <button type="submit" class="btn-nav btn-save" id="btnSave">Salvează</button>
     </div>
   </form>
@@ -698,12 +698,38 @@ function pasteCoords(ev) {
 }
 
 function useMyLocation() {
-  if (!navigator.geolocation) { showError('Localizarea nu este disponibilă pe acest dispozitiv.'); return; }
-  navigator.geolocation.getCurrentPosition(pos => {
+  if (!navigator.geolocation) { showError('Localizarea nu este disponibilă în acest browser.'); return; }
+  const btn = document.getElementById('btnLocatie');
+  const gata = () => { btn.disabled = false; btn.textContent = '📍 Locația mea'; };
+  const reusit = pos => {
     document.getElementById('fLat').value = pos.coords.latitude.toFixed(6);
     document.getElementById('fLng').value = pos.coords.longitude.toFixed(6);
+    const m = Math.round(pos.coords.accuracy || 0);
     showError('');
-  }, () => showError('Nu am putut obține locația. Verifică permisiunile.'), { enableHighAccuracy: true, timeout: 10000 });
+    linkStatus('✓ Locația ta, cu o precizie de aproximativ ' + m + ' m.' + (m > 50 ? ' E destul de imprecisă; ieși afară sau mai încearcă o dată.' : ''),
+      m > 50 ? 'warn' : 'ok', { lat: pos.coords.latitude.toFixed(6), lng: pos.coords.longitude.toFixed(6) });
+    gata();
+  };
+  const esuat = (err, ultima) => {
+    /* 1 = permisiune refuzată, 2 = poziție indisponibilă, 3 = a durat prea mult */
+    if (err.code === 1) {
+      showError('Telefonul nu permite acestei pagini să vadă locația. Pe iPhone: Configurări → Intimitate și securitate → Servicii de localizare → Site-uri Safari → „La utilizarea aplicației”. Apoi reîncarcă pagina și apasă „Permite”.');
+      gata();
+      return;
+    }
+    if (!ultima) {
+      /* A doua încercare, mai puțin pretențioasă: merge și în interior sau cu GPS slab */
+      navigator.geolocation.getCurrentPosition(reusit, e => esuat(e, true), { enableHighAccuracy: false, timeout: 20000, maximumAge: 60000 });
+      return;
+    }
+    showError(err.code === 3
+      ? 'Locația nu a putut fi stabilită la timp. Ieși afară sau lângă o fereastră și mai încearcă o dată.'
+      : 'Telefonul nu își poate stabili poziția acum. Verifică dacă serviciile de localizare sunt pornite și mai încearcă o dată.');
+    gata();
+  };
+  btn.disabled = true; btn.textContent = 'Se caută locația…';
+  showError('');
+  navigator.geolocation.getCurrentPosition(reusit, e => esuat(e, false), { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
 }
 
 async function saveCasa(ev) {
