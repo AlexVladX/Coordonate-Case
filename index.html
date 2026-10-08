@@ -7,7 +7,8 @@
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f0; color: #1a1a18; min-height: 100vh; }
-  .header { padding: 16px; border-bottom: 1px solid #e5e3da; background: #fff; display: flex; align-items: center; gap: 12px; position: sticky; top: 0; z-index: 10; }
+  .header { padding: 10px 16px; border-bottom: 1px solid #e5e3da; background: #fff; display: flex; align-items: center; gap: 12px; }
+  .sticky-top { position: sticky; top: 0; z-index: 10; }
   .header-icon { width: 36px; height: 36px; background: #E6F1FB; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
   .header h1 { font-size: 17px; font-weight: 600; }
   .header span { font-size: 13px; color: #73726c; }
@@ -17,7 +18,7 @@
   .filters { padding: 10px 16px; display: flex; gap: 8px; background: #fff; border-bottom: 1px solid #e5e3da; overflow-x: auto; }
   .filter-btn { padding: 6px 14px; border-radius: 20px; border: 1px solid #d3d1c7; font-size: 13px; cursor: pointer; white-space: nowrap; background: #fff; color: #5f5e5a; }
   .filter-btn.active { background: #E6F1FB; color: #0C447C; border-color: #85B7EB; font-weight: 500; }
-  .count { font-size: 13px; color: #73726c; padding: 10px 16px 4px; }
+  .count { scroll-margin-top: 126px; font-size: 13px; color: #73726c; padding: 10px 16px 4px; }
   .list { padding: 8px 16px 24px; display: flex; flex-direction: column; gap: 10px; }
   .card { background: #fff; border: 1px solid #e5e3da; border-radius: 14px; padding: 14px; }
   .card-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px; gap: 8px; }
@@ -37,7 +38,7 @@
   .btn-copy { background: #f5f5f0; color: #5f5e5a; border-color: #d3d1c7; font-size: 13px; }
   .coords { font-size: 11px; color: #b4b2a9; }
   .no-results { text-align: center; padding: 40px 20px; color: #73726c; }
-  .add-panel { scroll-margin-top: 72px; background: #fff; border-bottom: 1px solid #e5e3da; padding: 10px 16px; }
+  .add-panel { scroll-margin-top: 122px; background: #fff; border-bottom: 1px solid #e5e3da; padding: 10px 16px; }
   .add-toggle { width: 100%; padding: 10px; border-radius: 10px; border: 1px dashed #85B7EB; background: #E6F1FB; color: #0C447C; font-size: 15px; font-weight: 600; cursor: pointer; }
   .add-form { display: none; flex-direction: column; gap: 10px; margin-top: 12px; }
   .add-form.open { display: flex; }
@@ -72,6 +73,7 @@
 </head>
 <body>
 
+<div class="sticky-top">
 <div class="header">
   <div class="header-icon">
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
@@ -86,7 +88,8 @@
 </div>
 
 <div class="search-bar">
-  <input type="text" placeholder="Caută după nume sau adresă..." id="searchInput" oninput="filterCards()">
+  <input type="search" placeholder="Caută după nume sau notițe..." id="searchInput" oninput="filterCards(); laRezultate()">
+</div>
 </div>
 
 <div class="add-panel">
@@ -586,6 +589,13 @@ function setFilter(f, btn) {
   document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   filterCards();
+}
+
+/* Când cauți din mijlocul listei, aduce rezultatele imediat sub bara de căutare */
+function laRezultate() {
+  const bara = document.querySelector('.sticky-top').getBoundingClientRect().bottom;
+  const count = document.querySelector('.count');
+  if (count.getBoundingClientRect().top < bara) count.scrollIntoView({ block: 'start' });
 }
 
 function filterCards() {
