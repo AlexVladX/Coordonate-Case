@@ -48,6 +48,10 @@
   .coord-row { display: flex; gap: 8px; }
   .coord-row > div { flex: 1; min-width: 0; }
   .form-hint { font-size: 12px; color: #73726c; }
+  .link-status { font-size: 12px; margin-top: 4px; min-height: 16px; color: #73726c; }
+  .link-status.ok { color: #27500A; }
+  .link-status.err { color: #A32D2D; }
+  .card.stergere { opacity: .45; pointer-events: none; }
   .form-error { font-size: 13px; color: #A32D2D; display: none; }
   .form-actions { display: flex; gap: 8px; }
   .btn-save { background: #185FA5; color: #fff; border-color: #185FA5; }
@@ -83,6 +87,12 @@
       <label for="fNume">Nume casă</label>
       <input type="text" id="fNume" placeholder="ex. Vila Marina" required>
     </div>
+    <div>
+      <label for="fLink">Link Google Maps / Hărți Apple (opțional)</label>
+      <input type="text" id="fLink" placeholder="Lipește linkul locației" autocomplete="off" autocapitalize="off"
+             onpaste="setTimeout(dinLink, 0)" onchange="dinLink()">
+      <div class="link-status" id="linkStatus">Coordonatele se completează singure din link.</div>
+    </div>
     <div class="coord-row">
       <div>
         <label for="fLat">Latitudine</label>
@@ -93,7 +103,6 @@
         <input type="text" id="fLng" inputmode="decimal" placeholder="8.7572" required>
       </div>
     </div>
-    <div class="form-hint">Poți lipi direct „42.5531, 8.7572” din Google Maps în primul câmp.</div>
     <div>
       <label for="fNote">Notițe</label>
       <textarea id="fNote" placeholder="Cod poartă, parcare, observații..."></textarea>
@@ -143,6 +152,8 @@ const CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTK9Gqn_GzSAwii
 const CACHE_KEY = 'coordonate-case-cache';
 let cacheData = null;      // momentul ultimei actualizări reușite
 let seIncarca = true;
+let modificari = 0;        // crește la fiecare adăugare / ștergere
+const inStergere = new Set();
 
 function citesteCache() {
   try {
@@ -189,6 +200,7 @@ async function incarca() {
   const areCache = citesteCache();
   if (areCache) filterCards();
   setSync('se actualizează…');
+  const v = modificari;
   try {
     let lista;
     if (SCRIPT_URL) {
@@ -197,6 +209,9 @@ async function incarca() {
     } else {
       lista = await dinCsv();
     }
+    /* Dacă între timp s-a adăugat sau șters ceva, răspunsul acesta e deja vechi:
+       nu-l folosim, ca să nu readucă în listă o casă ștearsă. */
+    if (v !== modificari) { setSync(''); seIncarca = false; return; }
     case_ = lista;
     scrieCache();
     setSync('actualizat acum');
@@ -268,8 +283,93 @@ async function apel(data, pinGresit) {
     setPin(p.trim());
     return apel(data, true);
   }
-  if (!d.ok) throw new Error(d.error || 'Eroare necunoscută.');
+  if (!d.ok) {
+    const er = new Error(d.mesaj || d.error || 'Eroare necunoscută.');
+    er.code = d.error;
+    throw er;
+  }
   return d;
+}
+
+/* ================================================
+   COORDONATE DIN LINK (Google Maps / Hărți Apple)
+   ================================================ */
+
+function coordValide(lat, lng) {
+  lat = Number(lat); lng = Number(lng);
+  return isFinite(lat) && isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 && !(lat === 0 && lng === 0);
+}
+
+/* Întoarce { lat, lng, aprox } sau null */
+function coordDinText(text) {
+  let t = String(text || '');
+  for (let i = 0; i < 2; i++) { try { t = decodeURIComponent(t); } catch (e) { break; } }
+  const N = '(-?\\d{1,3}(?:\\.\\d+)?)';
+  const tipare = [
+    [new RegExp('!3d' + N + '!4d' + N), false],                                             // Google: pinul locului
+    [new RegExp('[?&#](?:q|query|ll|coordinate|destination|daddr|center|address)=(?:loc:)?' + N + '\\s*,\\s*' + N, 'i'), false],
+    [new RegExp('/maps/(?:search|place|dir)/' + N + ',\\+?' + N), false],
+    [new RegExp('@' + N + ',' + N), true],                                                  // Google: centrul hărții
+    [new RegExp('[?&#]sll=' + N + ',' + N, 'i'), true]
+  ];
+  for (const [re, aprox] of tipare) {
+    const m = t.match(re);
+    if (m && coordValide(m[1], m[2])) return { lat: Number(m[1]), lng: Number(m[2]), aprox: aprox };
+  }
+  if (!/https?:\/\//i.test(t)) {
+    const m = t.match(new RegExp(N + '\\s*[,;\\s]\\s*' + N));
+    if (m && coordValide(m[1], m[2])) return { lat: Number(m[1]), lng: Number(m[2]), aprox: false };
+  }
+  return null;
+}
+
+function linkStatus(msg, tip) {
+  const e = document.getElementById('linkStatus');
+  e.textContent = msg;
+  e.className = 'link-status' + (tip ? ' ' + tip : '');
+}
+
+function punCoord(c) {
+  document.getElementById('fLat').value = c.lat;
+  document.getElementById('fLng').value = c.lng;
+  linkStatus(c.aprox
+    ? '✓ Coordonate extrase, dar aproximative (centrul hărții). Verifică-le.'
+    : '✓ Coordonate extrase: ' + c.lat + ', ' + c.lng, 'ok');
+}
+
+let ultimulLink = '';
+async function dinLink() {
+  const text = document.getElementById('fLink').value.trim();
+  if (!text || text === ultimulLink) return;
+  ultimulLink = text;
+
+  const c = coordDinText(text);
+  if (c && !c.aprox) { punCoord(c); return; }
+
+  const url = (text.match(/https?:\/\/\S+/i) || [])[0];
+  if (!url) {
+    if (c) punCoord(c); else linkStatus('Nu am găsit coordonate în textul lipit.', 'err');
+    return;
+  }
+  if (!SCRIPT_URL) {
+    if (c) punCoord(c); else linkStatus('Linkul nu conține coordonate. Folosește linkul lung sau completează manual.', 'err');
+    return;
+  }
+
+  /* Link scurt (sau doar aproximativ): îl deschide scriptul din Google Sheet */
+  if (c) punCoord(c);
+  linkStatus('Se caută coordonatele în link…');
+  try {
+    const d = await apel({ action: 'resolve', url: url });
+    if (document.getElementById('fLink').value.trim() !== text) return;
+    punCoord(d);
+  } catch (e) {
+    if (c) { punCoord(c); return; }
+    ultimulLink = '';
+    linkStatus(e.code === 'Actiune necunoscuta.'
+      ? 'Scriptul din Google Sheet trebuie actualizat ca să citească linkurile scurte.'
+      : 'Nu am putut citi linkul: ' + e.message + ' Completează coordonatele manual.', 'err');
+  }
 }
 
 function toggleForm(open) {
@@ -320,8 +420,10 @@ async function saveCasa(ev) {
   if (SCRIPT_URL) {
     const btn = document.getElementById('btnSave');
     btn.disabled = true; btn.textContent = 'Se salvează...';
+    modificari++;
     try {
       const d = await apel({ action: 'add', nume: nume, lat: lat, lng: lng, note: note });
+      modificari++;
       case_.push(d.casa);
       scrieCache();
       mesaj = '✓ „' + nume + '” a fost salvată în Google Sheet.';
@@ -339,6 +441,8 @@ async function saveCasa(ev) {
 
   showError('');
   document.getElementById('addForm').reset();
+  ultimulLink = '';
+  linkStatus('Coordonatele se completează singure din link.');
   toggleForm(false);
   showOk(mesaj);
   filterCards();
@@ -354,15 +458,30 @@ async function deleteCasa(id) {
     return;
   }
   const c = case_.find(x => String(x.id) === String(id));
-  if (!c || !confirm('Ștergi „' + c.nume + '” din Google Sheet? Dispare de pe toate dispozitivele.')) return;
-  try {
-    await apel({ action: 'delete', id: c.id });
-    case_ = case_.filter(x => x !== c);
+  const cheie = String(id);
+  if (!c || inStergere.has(cheie)) return;
+  if (!confirm('Ștergi „' + c.nume + '” din Google Sheet? Dispare de pe toate dispozitivele.')) return;
+
+  const scoate = mesaj => {
+    modificari++;
+    case_ = case_.filter(x => String(x.id) !== cheie);
     scrieCache();
-    showOk('✓ „' + c.nume + '” a fost ștearsă.');
-    filterCards();
+    showOk(mesaj);
+  };
+
+  inStergere.add(cheie);
+  modificari++;
+  filterCards();
+  try {
+    await apel({ action: 'delete', id: c.id, nume: c.nume });
+    scoate('✓ „' + c.nume + '” a fost ștearsă.');
   } catch (e) {
-    alert(e.message);
+    /* Foaia spune că rândul nu mai există: fusese deja șters, deci îl scoatem și de aici */
+    if (e.code === 'notfound' || /nu a fost gasita/i.test(e.message)) scoate('✓ „' + c.nume + '” era deja ștearsă din Google Sheet.');
+    else alert('„' + c.nume + '” nu a fost ștearsă. ' + e.message);
+  } finally {
+    inStergere.delete(cheie);
+    filterCards();
   }
 }
 
@@ -422,7 +541,8 @@ function render(list) {
     const wazeUrl = 'https://waze.com/ul?ll=' + c.lat + '%2C' + c.lng + '&navigate=yes';
     const telHtml = c.tel ? '<a href="tel:' + c.tel + '" class="btn-nav btn-copy" style="flex:none;padding:9px 12px;">📞 ' + c.tel + '</a>' : '';
 
-    return '<div class="card">' +
+    const seSterge = inStergere.has(String(c.id));
+    return '<div class="card' + (seSterge ? ' stergere' : '') + '">' +
       '<div class="card-top">' +
         '<span class="card-name">' + esc(c.nume) + '</span>' +
         '<span class="badge ' + badgeClass + '">' + badgeText + '</span>' +
@@ -437,7 +557,7 @@ function render(list) {
         '<a class="btn-nav btn-gm" href="' + gmUrl + '">Google Maps</a>' +
         '<a class="btn-nav btn-waze" href="' + wazeUrl + '">Waze</a>' +
         '<button class="btn-nav btn-copy" onclick="copyCoords(' + c.lat + ',' + c.lng + ')">Copiază GPS</button>' +
-        (c.local || c.app ? '<button class="btn-nav btn-del" onclick="deleteCasa(\'' + esc(c.id) + '\')">Șterge</button>' : '') +
+        (c.local || c.app ? '<button class="btn-nav btn-del" onclick="deleteCasa(\'' + esc(c.id) + '\')">' + (seSterge ? 'Se șterge…' : 'Șterge') + '</button>' : '') +
       '</div>' +
       (c.tel ? '<div class="card-actions">' + telHtml + '</div>' : '') +
       '<div class="coords">' + c.lat + ', ' + c.lng + '</div>' +
