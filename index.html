@@ -37,6 +37,22 @@
   .btn-copy { background: #f5f5f0; color: #5f5e5a; border-color: #d3d1c7; font-size: 13px; }
   .coords { font-size: 11px; color: #b4b2a9; }
   .no-results { text-align: center; padding: 40px 20px; color: #73726c; }
+  .add-panel { background: #fff; border-bottom: 1px solid #e5e3da; padding: 10px 16px; }
+  .add-toggle { width: 100%; padding: 10px; border-radius: 10px; border: 1px dashed #85B7EB; background: #E6F1FB; color: #0C447C; font-size: 15px; font-weight: 600; cursor: pointer; }
+  .add-form { display: none; flex-direction: column; gap: 10px; margin-top: 12px; }
+  .add-form.open { display: flex; }
+  .add-form label { font-size: 12px; font-weight: 600; color: #5f5e5a; display: block; margin-bottom: 4px; }
+  .add-form input, .add-form textarea { width: 100%; padding: 9px 12px; border: 1px solid #d3d1c7; border-radius: 10px; font-size: 16px; font-family: inherit; background: #f5f5f0; color: #1a1a18; outline: none; }
+  .add-form input:focus, .add-form textarea:focus { border-color: #378ADD; background: #fff; }
+  .add-form textarea { min-height: 70px; resize: vertical; }
+  .coord-row { display: flex; gap: 8px; }
+  .coord-row > div { flex: 1; min-width: 0; }
+  .form-hint { font-size: 12px; color: #73726c; }
+  .form-error { font-size: 13px; color: #A32D2D; display: none; }
+  .form-actions { display: flex; gap: 8px; }
+  .btn-save { background: #185FA5; color: #fff; border-color: #185FA5; }
+  .btn-del { flex: none; background: #FCEBEB; color: #A32D2D; border-color: #F09595; font-size: 13px; }
+  .badge-local { background: #EEEDFE; color: #3C3489; }
 </style>
 </head>
 <body>
@@ -55,6 +71,36 @@
 
 <div class="search-bar">
   <input type="text" placeholder="Caută după nume sau adresă..." id="searchInput" oninput="filterCards()">
+</div>
+
+<div class="add-panel">
+  <button class="add-toggle" id="addToggle" onclick="toggleForm()">+ Adaugă casă</button>
+  <form class="add-form" id="addForm" onsubmit="saveCasa(event)">
+    <div>
+      <label for="fNume">Nume casă</label>
+      <input type="text" id="fNume" placeholder="ex. Vila Marina" required>
+    </div>
+    <div class="coord-row">
+      <div>
+        <label for="fLat">Latitudine</label>
+        <input type="text" id="fLat" inputmode="decimal" placeholder="42.5531" onpaste="pasteCoords(event)" required>
+      </div>
+      <div>
+        <label for="fLng">Longitudine</label>
+        <input type="text" id="fLng" inputmode="decimal" placeholder="8.7572" required>
+      </div>
+    </div>
+    <div class="form-hint">Poți lipi direct „42.5531, 8.7572” din Google Maps în primul câmp.</div>
+    <div>
+      <label for="fNote">Notițe</label>
+      <textarea id="fNote" placeholder="Cod poartă, parcare, observații..."></textarea>
+    </div>
+    <div class="form-error" id="formError"></div>
+    <div class="form-actions">
+      <button type="button" class="btn-nav btn-copy" onclick="useMyLocation()">📍 Locația mea</button>
+      <button type="submit" class="btn-nav btn-save">Salvează</button>
+    </div>
+  </form>
 </div>
 
 <div class="count" id="countLabel"></div>
@@ -99,6 +145,100 @@ fetch('https://docs.google.com/spreadsheets/d/e/2PACX-1vTK9Gqn_GzSAwiiml_UeBj6bu
 
 /* ================================================ */
 
+/* ================================================
+   CASE ADĂUGATE DIN FORMULAR
+   Se salvează în browser (localStorage), pe acest dispozitiv.
+   ================================================ */
+
+const STORAGE_KEY = 'coordonate-case-local';
+let caseLocale = loadLocale();
+
+function loadLocale() {
+  try {
+    const v = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+    return Array.isArray(v) ? v : [];
+  } catch (e) { return []; }
+}
+
+function saveLocale() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(caseLocale)); return true; }
+  catch (e) { return false; }
+}
+
+function toateCasele() { return caseLocale.concat(case_); }
+
+function esc(v) {
+  return String(v == null ? '' : v).replace(/[&<>"']/g, ch =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+}
+
+function parseNum(v) { return Number(String(v).trim().replace(',', '.')); }
+
+function toggleForm(open) {
+  const f = document.getElementById('addForm');
+  const isOpen = open === undefined ? !f.classList.contains('open') : open;
+  f.classList.toggle('open', isOpen);
+  document.getElementById('addToggle').textContent = isOpen ? '× Închide' : '+ Adaugă casă';
+  if (isOpen) document.getElementById('fNume').focus();
+}
+
+function showError(msg) {
+  const e = document.getElementById('formError');
+  e.textContent = msg;
+  e.style.display = msg ? 'block' : 'none';
+}
+
+/* Lipire „lat, lng” într-un singur pas */
+function pasteCoords(ev) {
+  const text = (ev.clipboardData || window.clipboardData).getData('text');
+  const m = text.match(/(-?\d+(?:\.\d+)?)\s*[,;\s]\s*(-?\d+(?:\.\d+)?)/);
+  if (!m) return;
+  ev.preventDefault();
+  document.getElementById('fLat').value = m[1];
+  document.getElementById('fLng').value = m[2];
+}
+
+function useMyLocation() {
+  if (!navigator.geolocation) { showError('Localizarea nu este disponibilă pe acest dispozitiv.'); return; }
+  navigator.geolocation.getCurrentPosition(pos => {
+    document.getElementById('fLat').value = pos.coords.latitude.toFixed(6);
+    document.getElementById('fLng').value = pos.coords.longitude.toFixed(6);
+    showError('');
+  }, () => showError('Nu am putut obține locația. Verifică permisiunile.'), { enableHighAccuracy: true, timeout: 10000 });
+}
+
+function saveCasa(ev) {
+  ev.preventDefault();
+  const nume = document.getElementById('fNume').value.trim();
+  const lat = parseNum(document.getElementById('fLat').value);
+  const lng = parseNum(document.getElementById('fLng').value);
+  const note = document.getElementById('fNote').value.trim();
+
+  if (!nume) { showError('Completează numele casei.'); return; }
+  if (!isFinite(lat) || lat < -90 || lat > 90) { showError('Latitudine invalidă (între -90 și 90).'); return; }
+  if (!isFinite(lng) || lng < -180 || lng > 180) { showError('Longitudine invalidă (între -180 și 180).'); return; }
+
+  caseLocale.unshift({ id: 'local-' + Date.now(), nume: nume, lat: lat, lng: lng, note: note, local: true });
+  if (!saveLocale()) {
+    showError('Casa a fost adăugată, dar nu a putut fi salvată în browser (stocare blocată).');
+  } else {
+    showError('');
+  }
+  document.getElementById('addForm').reset();
+  toggleForm(false);
+  filterCards();
+}
+
+function deleteCasa(id) {
+  const c = caseLocale.find(x => x.id === id);
+  if (!c || !confirm('Ștergi „' + c.nume + '”?')) return;
+  caseLocale = caseLocale.filter(x => x.id !== id);
+  saveLocale();
+  filterCards();
+}
+
+/* ================================================ */
+
 let activeFilter = 'all';
 
 function setFilter(f, btn) {
@@ -110,7 +250,7 @@ function setFilter(f, btn) {
 
 function filterCards() {
   const q = document.getElementById('searchInput').value.toLowerCase();
-  const visible = case_.filter(c => {
+  const visible = toateCasele().filter(c => {
     return (c.nume || '').toLowerCase().includes(q) ||
            (c.note || '').toLowerCase().includes(q);
   });
@@ -135,7 +275,7 @@ function copyCoords(lat, lng) {
 function render(list) {
   const el = document.getElementById('cardList');
   const n = list.length;
-  document.getElementById('subtitle').textContent = case_.length + ' locații';
+  document.getElementById('subtitle').textContent = toateCasele().length + ' locații';
   document.getElementById('countLabel').textContent = 'Se afișează ' + n + ' locați' + (n === 1 ? 'e' : 'i');
 
   if (n === 0) {
@@ -144,14 +284,14 @@ function render(list) {
   }
 
   el.innerHTML = list.map(c => {
-    const [badgeClass, badgeText] = statusLabel(c.status || 'new');
+    const [badgeClass, badgeText] = c.local ? ['badge-local', 'Adăugată de mine'] : statusLabel(c.status || 'new');
     const gmUrl  = 'https://www.google.com/maps/dir/?api=1&destination=' + c.lat + ',' + c.lng;
     const wazeUrl = 'https://waze.com/ul?ll=' + c.lat + '%2C' + c.lng + '&navigate=yes';
     const telHtml = c.tel ? '<a href="tel:' + c.tel + '" class="btn-nav btn-copy" style="flex:none;padding:9px 12px;">📞 ' + c.tel + '</a>' : '';
 
     return '<div class="card">' +
       '<div class="card-top">' +
-        '<span class="card-name">' + c.nume + '</span>' +
+        '<span class="card-name">' + esc(c.nume) + '</span>' +
         '<span class="badge ' + badgeClass + '">' + badgeText + '</span>' +
       '</div>' +
       (c.adresa ? '<div class="card-addr">' + c.adresa + '</div>' : '') +
@@ -159,11 +299,12 @@ function render(list) {
         (c.suprafata ? '<span>Suprafață: <strong>' + c.suprafata + '</strong></span>' : '') +
         (c.pret ? '<span>Preț: <strong>' + c.pret + '</strong></span>' : '') +
       '</div>' : '') +
-      (c.note ? '<div class="card-note">' + c.note + '</div>' : '') +
+      (c.note ? '<div class="card-note" style="white-space:pre-wrap">' + esc(c.note) + '</div>' : '') +
       '<div class="card-actions">' +
         '<a class="btn-nav btn-gm" href="' + gmUrl + '">Google Maps</a>' +
         '<a class="btn-nav btn-waze" href="' + wazeUrl + '">Waze</a>' +
         '<button class="btn-nav btn-copy" onclick="copyCoords(' + c.lat + ',' + c.lng + ')">Copiază GPS</button>' +
+        (c.local ? '<button class="btn-nav btn-del" onclick="deleteCasa(\'' + c.id + '\')">Șterge</button>' : '') +
       '</div>' +
       (c.tel ? '<div class="card-actions">' + telHtml + '</div>' : '') +
       '<div class="coords">' + c.lat + ', ' + c.lng + '</div>' +
