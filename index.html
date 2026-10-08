@@ -52,6 +52,9 @@
   .form-actions { display: flex; gap: 8px; }
   .btn-save { background: #185FA5; color: #fff; border-color: #185FA5; }
   .btn-del { flex: none; background: #FCEBEB; color: #A32D2D; border-color: #F09595; font-size: 13px; }
+  .form-ok { font-size: 13px; color: #27500A; background: #EAF3DE; border-radius: 8px; padding: 8px 10px; margin-top: 10px; display: none; }
+  .btn-save:disabled { opacity: .6; cursor: default; }
+  .badge-app { background: #E1F5EE; color: #085041; }
   .badge-local { background: #EEEDFE; color: #3C3489; }
 </style>
 </head>
@@ -95,12 +98,14 @@
       <label for="fNote">Notițe</label>
       <textarea id="fNote" placeholder="Cod poartă, parcare, observații..."></textarea>
     </div>
+    <div class="form-hint" id="modeHint"></div>
     <div class="form-error" id="formError"></div>
     <div class="form-actions">
       <button type="button" class="btn-nav btn-copy" onclick="useMyLocation()">📍 Locația mea</button>
-      <button type="submit" class="btn-nav btn-save">Salvează</button>
+      <button type="submit" class="btn-nav btn-save" id="btnSave">Salvează</button>
     </div>
   </form>
+  <div class="form-ok" id="formOk"></div>
 </div>
 
 <div class="count" id="countLabel"></div>
@@ -123,25 +128,42 @@
 
 let case_ = [];
 
-fetch('https://docs.google.com/spreadsheets/d/e/2PACX-1vTK9Gqn_GzSAwiiml_UeBj6bugILzKLImxmxN5hORWfJ3jsQFxaqkknue_CDu158ywXbvqxKwiB3JO4/pub?output=csv')
-  .then(res => res.text())
-  .then(text => {
-    const rows = text.split('\n').slice(1);
+/* ================================================
+   LEGĂTURA CU GOOGLE SHEET
+   Lipește între ghilimele adresa aplicației web Apps Script
+   (se termină în /exec). Cât timp rămâne goală, casele noi
+   se salvează doar pe dispozitivul curent.
+   ================================================ */
+const SCRIPT_URL = '';
 
-    case_ = rows.map(r => {
-      const [id, nume, lat, lng, note] = r.split(',');
+const CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTK9Gqn_GzSAwiiml_UeBj6bugILzKLImxmxN5hORWfJ3jsQFxaqkknue_CDu158ywXbvqxKwiB3JO4/pub?output=csv';
 
-      return {
-        id: Number(id),
-        nume: nume,
-        lat: Number(lat),
-        lng: Number(lng),
-        note: note
-      };
+function incarcaCsv() {
+  return fetch(CSV_URL)
+    .then(res => res.text())
+    .then(text => {
+      const rows = text.split('\n').slice(1).filter(r => r.trim() !== '');
+      case_ = rows.map(r => {
+        const [id, nume, lat, lng, note] = r.split(',');
+        return { id: Number(id), nume: nume, lat: Number(lat), lng: Number(lng), note: note };
+      });
+      filterCards();
     });
+}
 
-    filterCards();
-  });
+function incarca() {
+  if (!SCRIPT_URL) return incarcaCsv();
+  return fetch(SCRIPT_URL)
+    .then(res => res.json())
+    .then(d => {
+      if (!d.ok) throw new Error(d.error);
+      case_ = d.case;
+      filterCards();
+    })
+    .catch(() => incarcaCsv());
+}
+
+incarca();
 
 /* ================================================ */
 
@@ -174,12 +196,46 @@ function esc(v) {
 
 function parseNum(v) { return Number(String(v).trim().replace(',', '.')); }
 
+function showOk(msg) {
+  const e = document.getElementById('formOk');
+  e.textContent = msg;
+  e.style.display = msg ? 'block' : 'none';
+}
+
+const PIN_KEY = 'coordonate-case-pin';
+function getPin() { try { return localStorage.getItem(PIN_KEY) || ''; } catch (e) { return ''; } }
+function setPin(v) { try { localStorage.setItem(PIN_KEY, v); } catch (e) {} }
+
+/* Trimite o modificare către Google Sheet */
+async function apel(data, pinGresit) {
+  data.pin = getPin();
+  let d;
+  try {
+    const res = await fetch(SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(data)
+    });
+    d = await res.json();
+  } catch (e) {
+    throw new Error('Nu am putut contacta Google Sheet. Verifică conexiunea la internet.');
+  }
+  if (d.error === 'pin') {
+    const p = prompt(pinGresit ? 'Cod greșit. Încearcă din nou:' : 'Introdu codul PIN pentru modificări:');
+    if (p === null) throw new Error('Operațiune anulată.');
+    setPin(p.trim());
+    return apel(data, true);
+  }
+  if (!d.ok) throw new Error(d.error || 'Eroare necunoscută.');
+  return d;
+}
+
 function toggleForm(open) {
   const f = document.getElementById('addForm');
   const isOpen = open === undefined ? !f.classList.contains('open') : open;
   f.classList.toggle('open', isOpen);
   document.getElementById('addToggle').textContent = isOpen ? '× Închide' : '+ Adaugă casă';
-  if (isOpen) document.getElementById('fNume').focus();
+  if (isOpen) { showOk(''); document.getElementById('fNume').focus(); }
 }
 
 function showError(msg) {
@@ -207,7 +263,7 @@ function useMyLocation() {
   }, () => showError('Nu am putut obține locația. Verifică permisiunile.'), { enableHighAccuracy: true, timeout: 10000 });
 }
 
-function saveCasa(ev) {
+async function saveCasa(ev) {
   ev.preventDefault();
   const nume = document.getElementById('fNume').value.trim();
   const lat = parseNum(document.getElementById('fLat').value);
@@ -218,24 +274,57 @@ function saveCasa(ev) {
   if (!isFinite(lat) || lat < -90 || lat > 90) { showError('Latitudine invalidă (între -90 și 90).'); return; }
   if (!isFinite(lng) || lng < -180 || lng > 180) { showError('Longitudine invalidă (între -180 și 180).'); return; }
 
-  caseLocale.unshift({ id: 'local-' + Date.now(), nume: nume, lat: lat, lng: lng, note: note, local: true });
-  if (!saveLocale()) {
-    showError('Casa a fost adăugată, dar nu a putut fi salvată în browser (stocare blocată).');
+  let mesaj;
+  if (SCRIPT_URL) {
+    const btn = document.getElementById('btnSave');
+    btn.disabled = true; btn.textContent = 'Se salvează...';
+    try {
+      const d = await apel({ action: 'add', nume: nume, lat: lat, lng: lng, note: note });
+      case_.push(d.casa);
+      mesaj = '✓ „' + nume + '” a fost salvată în Google Sheet.';
+    } catch (e) {
+      showError(e.message);
+      return;
+    } finally {
+      btn.disabled = false; btn.textContent = 'Salvează';
+    }
   } else {
-    showError('');
+    caseLocale.unshift({ id: 'local-' + Date.now(), nume: nume, lat: lat, lng: lng, note: note, local: true });
+    if (!saveLocale()) { showError('Casa nu a putut fi salvată în browser (stocare blocată).'); filterCards(); return; }
+    mesaj = '✓ „' + nume + '” a fost salvată pe acest dispozitiv.';
   }
+
+  showError('');
   document.getElementById('addForm').reset();
   toggleForm(false);
+  showOk(mesaj);
   filterCards();
 }
 
-function deleteCasa(id) {
-  const c = caseLocale.find(x => x.id === id);
-  if (!c || !confirm('Ștergi „' + c.nume + '”?')) return;
-  caseLocale = caseLocale.filter(x => x.id !== id);
-  saveLocale();
-  filterCards();
+async function deleteCasa(id) {
+  const local = caseLocale.find(x => String(x.id) === String(id));
+  if (local) {
+    if (!confirm('Ștergi „' + local.nume + '”?')) return;
+    caseLocale = caseLocale.filter(x => x !== local);
+    saveLocale();
+    filterCards();
+    return;
+  }
+  const c = case_.find(x => String(x.id) === String(id));
+  if (!c || !confirm('Ștergi „' + c.nume + '” din Google Sheet? Dispare de pe toate dispozitivele.')) return;
+  try {
+    await apel({ action: 'delete', id: c.id });
+    case_ = case_.filter(x => x !== c);
+    showOk('✓ „' + c.nume + '” a fost ștearsă.');
+    filterCards();
+  } catch (e) {
+    alert(e.message);
+  }
 }
+
+document.getElementById('modeHint').textContent = SCRIPT_URL
+  ? 'Casa se salvează în Google Sheet și apare pe toate dispozitivele.'
+  : 'Neconectat la Google Sheet: casa se salvează doar pe acest dispozitiv.';
 
 /* ================================================ */
 
@@ -284,7 +373,7 @@ function render(list) {
   }
 
   el.innerHTML = list.map(c => {
-    const [badgeClass, badgeText] = c.local ? ['badge-local', 'Adăugată de mine'] : statusLabel(c.status || 'new');
+    const [badgeClass, badgeText] = c.local ? ['badge-local', 'Doar pe acest dispozitiv'] : c.app ? ['badge-app', 'Adăugată din aplicație'] : statusLabel(c.status || 'new');
     const gmUrl  = 'https://www.google.com/maps/dir/?api=1&destination=' + c.lat + ',' + c.lng;
     const wazeUrl = 'https://waze.com/ul?ll=' + c.lat + '%2C' + c.lng + '&navigate=yes';
     const telHtml = c.tel ? '<a href="tel:' + c.tel + '" class="btn-nav btn-copy" style="flex:none;padding:9px 12px;">📞 ' + c.tel + '</a>' : '';
@@ -304,7 +393,7 @@ function render(list) {
         '<a class="btn-nav btn-gm" href="' + gmUrl + '">Google Maps</a>' +
         '<a class="btn-nav btn-waze" href="' + wazeUrl + '">Waze</a>' +
         '<button class="btn-nav btn-copy" onclick="copyCoords(' + c.lat + ',' + c.lng + ')">Copiază GPS</button>' +
-        (c.local ? '<button class="btn-nav btn-del" onclick="deleteCasa(\'' + c.id + '\')">Șterge</button>' : '') +
+        (c.local || c.app ? '<button class="btn-nav btn-del" onclick="deleteCasa(\'' + esc(c.id) + '\')">Șterge</button>' : '') +
       '</div>' +
       (c.tel ? '<div class="card-actions">' + telHtml + '</div>' : '') +
       '<div class="coords">' + c.lat + ', ' + c.lng + '</div>' +
