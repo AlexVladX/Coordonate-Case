@@ -75,6 +75,11 @@
   .badge-modificat { background: #FAEEDA; color: #633806; }
   .badge-asteptare { background: #F1EFE8; color: #444441; }
   .badge-eroare { background: #FCEBEB; color: #A32D2D; }
+  .card-cod { display: flex; align-items: baseline; gap: 10px; background: #EAF3DE; border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .card-cod .et { font-size: 12px; color: #3B6D11; flex: none; }
+  .card-cod .val { font-size: 22px; font-weight: 600; letter-spacing: 1px; color: #173404; font-variant-numeric: tabular-nums; word-break: break-all; }
+  .card-cod.copiat .val { font-size: 15px; letter-spacing: 0; }
+  .pop-cod { font-size: 13px; margin-bottom: 4px; }
   .card-err { font-size: 12px; color: #A32D2D; margin-bottom: 8px; }
   .coada-bar { display: none; align-items: center; gap: 10px; font-size: 13px; color: #633806; background: #FAEEDA; border-radius: 8px; padding: 8px 10px; margin-top: 10px; }
   .coada-bar span { flex: 1; }
@@ -110,7 +115,7 @@
 </div>
 
 <div class="search-bar">
-  <input type="search" placeholder="Caută după nume sau notițe..." id="searchInput" oninput="filterCards(); laRezultate()">
+  <input type="search" placeholder="Caută după nume, cod sau notițe..." id="searchInput" oninput="filterCards(); laRezultate()">
 </div>
 </div>
 
@@ -142,8 +147,12 @@
       </div>
     </div>
     <div>
+      <label for="fCod">Cod acces (opțional)</label>
+      <input type="text" id="fCod" placeholder="ex. 2512" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+    </div>
+    <div>
       <label for="fNote">Notițe</label>
-      <textarea id="fNote" placeholder="Cod poartă, parcare, observații..."></textarea>
+      <textarea id="fNote" placeholder="Cum ajungi, parcare, unde e cheia..."></textarea>
     </div>
     <div class="form-hint" id="modeHint"></div>
     <div class="form-error" id="formError"></div>
@@ -189,8 +198,6 @@ let case_ = [];
    ================================================ */
 const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbylIOmKEu8GqeKfwAYU073vx1Z3AU5qw0GgzLB52vI3x33mtm0m1f5CigSyYO21DCdiYA/exec';
 
-const CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTK9Gqn_GzSAwiiml_UeBj6bugILzKLImxmxN5hORWfJ3jsQFxaqkknue_CDu158ywXbvqxKwiB3JO4/pub?output=csv';
-
 /* Copia listei păstrată pe telefon: se afișează imediat la deschidere,
    apoi se actualizează în fundal când răspunde rețeaua. */
 const CACHE_KEY = 'coordonate-case-cache';
@@ -226,41 +233,40 @@ function cuLimita(url) {
   return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(timer));
 }
 
-async function dinCsv() {
-  const text = await (await cuLimita(CSV_URL)).text();
-  return text.split('\n').slice(1).filter(r => r.trim() !== '').map(r => {
-    const [id, nume, lat, lng, note] = r.split(',');
-    return { id: Number(id), nume: nume, lat: Number(lat), lng: Number(lng), note: note };
-  });
+/* Lista se cere scriptului împreună cu codul PIN; fără el, foaia nu răspunde */
+async function dinScript() {
+  const d = await apel({ action: 'list' });
+  return d.case;
 }
 
-async function dinScript() {
-  const d = await (await cuLimita(SCRIPT_URL)).json();
-  if (!d.ok) throw new Error(d.error);
-  return d.case;
+let pinCerut = false;      // lista e protejată și codul nu a fost introdus
+
+function stergeCache() {
+  case_ = [];
+  cacheData = null;
+  try { localStorage.removeItem(CACHE_KEY); } catch (e) {}
 }
 
 async function incarca() {
   const areCache = citesteCache();
   if (areCache) filterCards();
+  if (!SCRIPT_URL) { seIncarca = false; filterCards(); return; }
   setSync('se actualizează…');
   const v = modificari;
   try {
-    let lista;
-    if (SCRIPT_URL) {
-      try { lista = await dinScript(); }
-      catch (e) { if (areCache) throw e; lista = await dinCsv(); }
-    } else {
-      lista = await dinCsv();
-    }
+    const lista = await dinScript();
+    pinCerut = false;
+    pinAnulat = false;
     /* Dacă între timp s-a adăugat sau șters ceva, răspunsul acesta e deja vechi:
        nu-l folosim, ca să nu readucă în listă o casă ștearsă. */
-    if (v !== modificari) { setSync(''); seIncarca = false; return; }
+    if (v !== modificari) { setSync(''); seIncarca = false; filterCards(); return; }
     case_ = lista;
     scrieCache();
     setSync('actualizat acum');
   } catch (e) {
-    setSync(cacheData ? 'fără conexiune, date de ' + dataScurta(cacheData) : 'fără conexiune');
+    if (e.anulat) { pinCerut = true; setSync('lista este protejată cu PIN'); }
+    else if (e.retea) setSync(cacheData ? 'fără conexiune, date de ' + dataScurta(cacheData) : 'fără conexiune');
+    else setSync(e.code === 'Actiune necunoscuta.' ? 'scriptul din Google Sheet trebuie actualizat' : 'lista nu a putut fi citită');
   }
   seIncarca = false;
   filterCards();
@@ -321,11 +327,11 @@ function toateCasele() {
   const editari = coada.filter(o => o.tip === 'update');
   const lista = case_.map(c => {
     const o = editari.find(o => String(o.id) === String(c.id) && acelasiNume(o.numeVechi, c.nume));
-    return o ? Object.assign({}, c, { nume: o.nume, lat: o.lat, lng: o.lng, note: o.note, _op: o, _srv: c })
+    return o ? Object.assign({}, c, { nume: o.nume, lat: o.lat, lng: o.lng, note: o.note, cod: o.cod, _op: o, _srv: c })
              : Object.assign({}, c, { _srv: c });
   });
   coada.filter(o => o.tip === 'add').forEach(o => {
-    lista.push({ id: o.k, nume: o.nume, lat: o.lat, lng: o.lng, note: o.note, app: true, _op: o });
+    lista.push({ id: o.k, nume: o.nume, lat: o.lat, lng: o.lng, note: o.note, cod: o.cod, app: true, _op: o });
   });
   return caseLocale.concat(lista);
 }
@@ -358,7 +364,7 @@ async function trimiteCoada(manual) {
       opInZbor = op;
       modificari++;
       filterCards();
-      const date = { nume: op.nume, lat: op.lat, lng: op.lng, note: op.note };
+      const date = { nume: op.nume, lat: op.lat, lng: op.lng, note: op.note, cod: op.cod || '' };
       let r;
       try {
         r = await apel(Object.assign(op.tip === 'add' ? { action: 'add' } : { action: 'update', id: op.id, numeVechi: op.numeVechi }, date));
@@ -458,7 +464,10 @@ async function apel(data, pinGresit) {
     clearTimeout(timer);
   }
   if (d.error === 'pin') {
-    const p = prompt(pinGresit ? 'Cod greșit. Încearcă din nou:' : 'Introdu codul PIN pentru modificări:');
+    /* Codul lipsește sau a fost schimbat: telefonul nu mai are voie să arate lista păstrată */
+    stergeCache();
+    filterCards();
+    const p = prompt(pinGresit ? 'Cod greșit. Încearcă din nou:' : 'Introdu codul PIN al aplicației:');
     if (p === null) { const er = new Error('Operațiune anulată.'); er.anulat = true; throw er; }
     setPin(p.trim());
     return apel(data, true);
@@ -663,6 +672,7 @@ function editCasa(i) {
   document.getElementById('fLat').value = c.lat;
   document.getElementById('fLng').value = c.lng;
   document.getElementById('fNote').value = c.note || '';
+  document.getElementById('fCod').value = c.cod || '';
   const t = document.getElementById('editTitle');
   t.textContent = 'Editezi: ' + (c.nume || '');
   t.style.display = 'block';
@@ -702,13 +712,14 @@ async function saveCasa(ev) {
   const lat = parseNum(document.getElementById('fLat').value);
   const lng = parseNum(document.getElementById('fLng').value);
   const note = document.getElementById('fNote').value.trim();
+  const cod = document.getElementById('fCod').value.trim();
 
   if (!nume) { showError('Completează numele casei.'); return; }
   if (!isFinite(lat) || lat < -90 || lat > 90) { showError('Latitudine invalidă (între -90 și 90).'); return; }
   if (!isFinite(lng) || lng < -180 || lng > 180) { showError('Longitudine invalidă (între -180 și 180).'); return; }
 
   const editata = inEditare;
-  const date = { nume: nume, lat: lat, lng: lng, note: note };
+  const date = { nume: nume, lat: lat, lng: lng, note: note, cod: cod };
   let mesaj;
 
   if (editata && editata.local) {
@@ -725,7 +736,7 @@ async function saveCasa(ev) {
       delete editata._op.eroare;
     } else if (editata) {
       const srv = editata._srv;
-      const schimbat = !acelasiNume(srv.nume, nume) || Number(srv.lat) !== lat || Number(srv.lng) !== lng || !acelasiNume(srv.note, note);
+      const schimbat = !acelasiNume(srv.nume, nume) || Number(srv.lat) !== lat || Number(srv.lng) !== lng || !acelasiNume(srv.note, note) || !acelasiNume(srv.cod, cod);
       if (!schimbat) { golesteFormular(); toggleForm(false); showOk('Nicio modificare de salvat.'); return; }
       coada.push(Object.assign({ k: cheie, tip: 'update', id: srv.id, numeVechi: String(srv.nume == null ? '' : srv.nume).trim() }, date));
     } else {
@@ -817,7 +828,8 @@ function filterCards() {
   const q = document.getElementById('searchInput').value.toLowerCase();
   const visible = toateCasele().filter(c => {
     return (c.nume || '').toLowerCase().includes(q) ||
-           (c.note || '').toLowerCase().includes(q);
+           (c.note || '').toLowerCase().includes(q) ||
+           String(c.cod || '').toLowerCase().includes(q);
   });
   render(visible);
 }
@@ -848,7 +860,7 @@ function copyLink(btn, lat, lng) {
 function trimiteCasa(i, btn) {
   const c = vizibile[i];
   if (!c) return;
-  const text = [String(c.nume || '').trim(), String(c.note || '').trim(),
+  const text = [String(c.nume || '').trim(), c.cod ? 'Cod acces: ' + c.cod : '', String(c.note || '').trim(),
     'https://www.google.com/maps/search/?api=1&query=' + c.lat + ',' + c.lng].filter(Boolean).join('\n');
   if (navigator.share) {
     navigator.share({ text: text }).catch(() => {});
@@ -934,6 +946,7 @@ function deseneazaPinuri(incadreaza) {
     if (!coordValide(lat, lng)) return;
     puncte.push([lat, lng]);
     const html = '<div class="pop-nume">' + esc(c.nume) + '</div>' +
+      (c.cod ? '<div class="pop-cod">Cod acces: <b>' + esc(c.cod) + '</b></div>' : '') +
       (c.note ? '<div class="pop-note">' + esc(c.note) + '</div>' : '') +
       '<div class="pop-links">' +
         '<a href="https://www.google.com/maps/dir/?api=1&destination=' + lat + ',' + lng + '">Google Maps</a>' +
@@ -951,6 +964,24 @@ function pozitiaMea() {
   if (!harta) return;
   document.getElementById('btnPozitie').textContent = '📍 Poziția mea';
   harta.locate({ setView: true, maxZoom: 15, enableHighAccuracy: true });
+}
+
+/* Apăsarea pe codul de acces îl copiază */
+function copyCod(el, i) {
+  const c = vizibile[i];
+  if (!c || !c.cod) return;
+  const cod = String(c.cod);
+  const val = el.querySelector('.val');
+  const gata = () => {
+    val.textContent = '✓ Cod copiat';
+    el.classList.add('copiat');
+    setTimeout(() => { val.textContent = cod; el.classList.remove('copiat'); }, 1500);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(cod).then(gata, () => prompt('Copiază codul:', cod));
+  } else {
+    prompt('Copiază codul:', cod);
+  }
 }
 
 /* Apăsarea pe coordonate le copiază ca text: „lat, lng” */
@@ -989,7 +1020,9 @@ function render(list) {
   if (hartaActiva) deseneazaPinuri(true);
 
   if (n === 0) {
-    el.innerHTML = '<div class="no-results">' + (seIncarca && !toateCasele().length ? 'Se încarcă lista…' : 'Nicio locație găsită.') + '</div>';
+    el.innerHTML = pinCerut && !toateCasele().length
+      ? '<div class="no-results">Lista este protejată cu un cod PIN.<br><br><button class="btn-harta" onclick="incarca()">Introdu codul PIN</button></div>'
+      : '<div class="no-results">' + (seIncarca && !toateCasele().length ? 'Se încarcă lista…' : 'Nicio locație găsită.') + '</div>';
     return;
   }
 
@@ -1010,6 +1043,7 @@ function render(list) {
         (c.suprafata ? '<span>Suprafață: <strong>' + c.suprafata + '</strong></span>' : '') +
         (c.pret ? '<span>Preț: <strong>' + c.pret + '</strong></span>' : '') +
       '</div>' : '') +
+      (c.cod ? '<div class="card-cod" role="button" title="Apasă pentru a copia codul" onclick="copyCod(this,' + i + ')"><span class="et">Cod acces</span><span class="val">' + esc(c.cod) + '</span></div>' : '') +
       (c.note ? '<div class="card-note" style="white-space:pre-wrap">' + esc(c.note) + '</div>' : '') +
       (c._op && c._op.eroare ? '<div class="card-err">Nu a putut fi trimisă: ' + esc(c._op.eroare) + ' Editează și salvează din nou, sau renunță.</div>' : '') +
       '<div class="card-actions">' +
