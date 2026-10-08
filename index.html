@@ -37,7 +37,7 @@
   .btn-copy { background: #f5f5f0; color: #5f5e5a; border-color: #d3d1c7; font-size: 13px; }
   .coords { font-size: 11px; color: #b4b2a9; }
   .no-results { text-align: center; padding: 40px 20px; color: #73726c; }
-  .add-panel { background: #fff; border-bottom: 1px solid #e5e3da; padding: 10px 16px; }
+  .add-panel { scroll-margin-top: 72px; background: #fff; border-bottom: 1px solid #e5e3da; padding: 10px 16px; }
   .add-toggle { width: 100%; padding: 10px; border-radius: 10px; border: 1px dashed #85B7EB; background: #E6F1FB; color: #0C447C; font-size: 15px; font-weight: 600; cursor: pointer; }
   .add-form { display: none; flex-direction: column; gap: 10px; margin-top: 12px; }
   .add-form.open { display: flex; }
@@ -60,7 +60,10 @@
   .form-error { font-size: 13px; color: #A32D2D; display: none; }
   .form-actions { display: flex; gap: 8px; }
   .btn-save { background: #185FA5; color: #fff; border-color: #185FA5; }
-  .btn-del { flex: none; background: #FCEBEB; color: #A32D2D; border-color: #F09595; font-size: 13px; }
+  .card-edit { display: flex; gap: 8px; margin-bottom: 8px; }
+  .btn-edit { flex: none; font-size: 13px; padding: 7px 14px; }
+  .edit-title { font-size: 14px; font-weight: 600; color: #0C447C; display: none; }
+  .btn-del { padding: 7px 14px; flex: none; background: #FCEBEB; color: #A32D2D; border-color: #F09595; font-size: 13px; }
   .form-ok { font-size: 13px; color: #27500A; background: #EAF3DE; border-radius: 8px; padding: 8px 10px; margin-top: 10px; display: none; }
   .btn-save:disabled { opacity: .6; cursor: default; }
   .badge-app { background: #E1F5EE; color: #085041; }
@@ -89,6 +92,7 @@
 <div class="add-panel">
   <button class="add-toggle" id="addToggle" onclick="toggleForm()">+ Adaugă casă</button>
   <form class="add-form" id="addForm" onsubmit="saveCasa(event)">
+    <div class="edit-title" id="editTitle"></div>
     <div>
       <label for="fNume">Nume casă</label>
       <input type="text" id="fNume" placeholder="ex. Vila Marina" required>
@@ -413,6 +417,42 @@ function toggleForm(open) {
   f.classList.toggle('open', isOpen);
   document.getElementById('addToggle').textContent = isOpen ? '× Închide' : '+ Adaugă casă';
   if (isOpen) { showOk(''); document.getElementById('fNume').focus(); }
+  else if (inEditare) golesteFormular();
+}
+
+/* ================================================
+   EDITARE
+   ================================================ */
+
+let inEditare = null;   // casa aflată în editare
+let vizibile = [];      // casele afișate acum, în ordinea cardurilor
+
+function golesteFormular() {
+  inEditare = null;
+  document.getElementById('addForm').reset();
+  ultimulLink = '';
+  linkStatus(LINK_HINT);
+  showError('');
+  const t = document.getElementById('editTitle');
+  t.style.display = 'none'; t.textContent = '';
+  document.getElementById('btnSave').textContent = 'Salvează';
+}
+
+function editCasa(i) {
+  const c = vizibile[i];
+  if (!c) return;
+  golesteFormular();
+  inEditare = c;
+  document.getElementById('fNume').value = c.nume || '';
+  document.getElementById('fLat').value = c.lat;
+  document.getElementById('fLng').value = c.lng;
+  document.getElementById('fNote').value = c.note || '';
+  const t = document.getElementById('editTitle');
+  t.textContent = 'Editezi: ' + (c.nume || '');
+  t.style.display = 'block';
+  document.getElementById('btnSave').textContent = 'Salvează modificările';
+  toggleForm(true);
+  document.querySelector('.add-panel').scrollIntoView({ block: 'start' });
 }
 
 function showError(msg) {
@@ -451,22 +491,38 @@ async function saveCasa(ev) {
   if (!isFinite(lat) || lat < -90 || lat > 90) { showError('Latitudine invalidă (între -90 și 90).'); return; }
   if (!isFinite(lng) || lng < -180 || lng > 180) { showError('Longitudine invalidă (între -180 și 180).'); return; }
 
+  const editata = inEditare;
+  const textButon = editata ? 'Salvează modificările' : 'Salvează';
   let mesaj;
-  if (SCRIPT_URL) {
+
+  if (editata && editata.local) {
+    Object.assign(editata, { nume: nume, lat: lat, lng: lng, note: note });
+    if (!saveLocale()) { showError('Modificarea nu a putut fi salvată în browser (stocare blocată).'); return; }
+    mesaj = '✓ „' + nume + '” a fost modificată pe acest dispozitiv.';
+  } else if (SCRIPT_URL) {
     const btn = document.getElementById('btnSave');
     btn.disabled = true; btn.textContent = 'Se salvează...';
     modificari++;
     try {
-      const d = await apel({ action: 'add', nume: nume, lat: lat, lng: lng, note: note });
-      modificari++;
-      case_.push(d.casa);
+      if (editata) {
+        await apel({ action: 'update', id: editata.id, numeVechi: editata.nume, nume: nume, lat: lat, lng: lng, note: note });
+        modificari++;
+        Object.assign(editata, { nume: nume, lat: lat, lng: lng, note: note });
+        mesaj = '✓ „' + nume + '” a fost modificată în Google Sheet.';
+      } else {
+        const d = await apel({ action: 'add', nume: nume, lat: lat, lng: lng, note: note });
+        modificari++;
+        case_.push(d.casa);
+        mesaj = '✓ „' + nume + '” a fost salvată în Google Sheet.';
+      }
       scrieCache();
-      mesaj = '✓ „' + nume + '” a fost salvată în Google Sheet.';
     } catch (e) {
-      showError(e.message);
+      showError(e.code === 'notfound' ? 'Casa nu mai există în Google Sheet sau a fost redenumită de pe alt dispozitiv. Apasă „Reîncarcă” și încearcă din nou.'
+        : e.code === 'Actiune necunoscuta.' ? 'Scriptul din Google Sheet trebuie actualizat ca să permită editarea.'
+        : e.message);
       return;
     } finally {
-      btn.disabled = false; btn.textContent = 'Salvează';
+      btn.disabled = false; btn.textContent = textButon;
     }
   } else {
     caseLocale.unshift({ id: 'local-' + Date.now(), nume: nume, lat: lat, lng: lng, note: note, local: true });
@@ -474,10 +530,7 @@ async function saveCasa(ev) {
     mesaj = '✓ „' + nume + '” a fost salvată pe acest dispozitiv.';
   }
 
-  showError('');
-  document.getElementById('addForm').reset();
-  ultimulLink = '';
-  linkStatus(LINK_HINT);
+  golesteFormular();
   toggleForm(false);
   showOk(mesaj);
   filterCards();
@@ -570,7 +623,8 @@ function render(list) {
     return;
   }
 
-  el.innerHTML = list.map(c => {
+  vizibile = list;
+  el.innerHTML = list.map((c, i) => {
     const [badgeClass, badgeText] = c.local ? ['badge-local', 'Doar pe acest dispozitiv'] : c.app ? ['badge-app', 'Adăugată din aplicație'] : statusLabel(c.status || 'new');
     const gmUrl  = 'https://www.google.com/maps/dir/?api=1&destination=' + c.lat + ',' + c.lng;
     const wazeUrl = 'https://waze.com/ul?ll=' + c.lat + '%2C' + c.lng + '&navigate=yes';
@@ -592,9 +646,12 @@ function render(list) {
         '<a class="btn-nav btn-gm" href="' + gmUrl + '">Google Maps</a>' +
         '<a class="btn-nav btn-waze" href="' + wazeUrl + '">Waze</a>' +
         '<button class="btn-nav btn-copy" onclick="copyCoords(' + c.lat + ',' + c.lng + ')">Copiază GPS</button>' +
-        (c.local || c.app ? '<button class="btn-nav btn-del" onclick="deleteCasa(\'' + esc(c.id) + '\')">' + (seSterge ? 'Se șterge…' : 'Șterge') + '</button>' : '') +
       '</div>' +
       (c.tel ? '<div class="card-actions">' + telHtml + '</div>' : '') +
+      (c.local || SCRIPT_URL ? '<div class="card-edit">' +
+        '<button class="btn-nav btn-copy btn-edit" onclick="editCasa(' + i + ')">✎ Editează</button>' +
+        (c.local || c.app ? '<button class="btn-nav btn-del" onclick="deleteCasa(\'' + esc(c.id) + '\')">' + (seSterge ? 'Se șterge…' : 'Șterge') + '</button>' : '') +
+      '</div>' : '') +
       '<div class="coords">' + c.lat + ', ' + c.lng + '</div>' +
     '</div>';
   }).join('');
