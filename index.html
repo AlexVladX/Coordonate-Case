@@ -57,6 +57,8 @@
   .link-status { font-size: 12px; margin-top: 4px; min-height: 16px; color: #73726c; }
   .link-status.ok { color: #27500A; }
   .link-status.err { color: #A32D2D; }
+  .link-status.warn { color: #854F0B; }
+  .link-status a { color: #185FA5; font-weight: 600; }
   .card.stergere { opacity: .45; pointer-events: none; }
   .form-error { font-size: 13px; color: #A32D2D; display: none; }
   .form-actions { display: flex; gap: 8px; }
@@ -339,18 +341,63 @@ function coordDinText(text) {
   return null;
 }
 
-function linkStatus(msg, tip) {
+/* Linkurile de tip „loc” nu conțin coordonate, ci identificatorul locului (0x...:0x...).
+   Din el se poate calcula poziția cu o precizie de câteva zeci de metri. */
+function coordDinFtid(hex) {
+  let id;
+  try { id = BigInt(hex); } catch (e) { return null; }
+  if (id <= 0n || id >= (1n << 64n)) return null;
+  const fata = Number(id >> 61n);
+  if (fata > 5) return null;
+  let tz = 0;
+  while (((id >> BigInt(tz)) & 1n) === 0n) tz++;
+  const nivel = 30 - (tz >> 1);
+  if (nivel < 20) return null;                       // celula prea mare ca sa fie utila
+  const POS_IJ = [[0, 1, 3, 2], [0, 2, 3, 1], [3, 2, 0, 1], [3, 1, 0, 2]];
+  const POS_OR = [1, 0, 0, 3];
+  let i = 0, j = 0, orient = fata & 1;
+  for (let k = 0; k < nivel; k++) {
+    const pos = Number((id >> BigInt(2 * (29 - k) + 1)) & 3n);
+    const ij = POS_IJ[orient][pos];
+    i = i * 2 + (ij >> 1); j = j * 2 + (ij & 1);
+    orient ^= POS_OR[pos];
+  }
+  const n = Math.pow(2, nivel);
+  const uv = function (x) { return x >= 0.5 ? (4 * x * x - 1) / 3 : (1 - 4 * (1 - x) * (1 - x)) / 3; };
+  const u = uv((i + 0.5) / n), v = uv((j + 0.5) / n);
+  const p = [[1, u, v], [-u, 1, v], [-u, -v, 1], [-1, -v, -u], [v, -1, -u], [v, u, -1]][fata];
+  const lat = Math.atan2(p[2], Math.sqrt(p[0] * p[0] + p[1] * p[1])) * 180 / Math.PI;
+  const lng = Math.atan2(p[1], p[0]) * 180 / Math.PI;
+  return { lat: Math.round(lat * 1e6) / 1e6, lng: Math.round(lng * 1e6) / 1e6, aprox: true };
+}
+
+function ftidDinText(text) {
+  let t = String(text || '');
+  for (let k = 0; k < 2; k++) { try { t = decodeURIComponent(t); } catch (e) { break; } }
+  const m = t.match(/(?:ftid=|!1s)(0x[0-9a-f]{8,16}):0x[0-9a-f]+/i);
+  return m ? coordDinFtid(m[1]) : null;
+}
+
+function linkStatus(msg, tip, coord) {
   const e = document.getElementById('linkStatus');
   e.textContent = msg;
   e.className = 'link-status' + (tip ? ' ' + tip : '');
+  if (coord) {
+    const a = document.createElement('a');
+    a.href = 'https://www.google.com/maps/search/?api=1&query=' + coord.lat + ',' + coord.lng;
+    a.target = '_blank'; a.rel = 'noopener';
+    a.textContent = 'Verifică pe hartă';
+    e.appendChild(document.createTextNode(' '));
+    e.appendChild(a);
+  }
 }
 
 function punCoord(c) {
   document.getElementById('fLat').value = c.lat;
   document.getElementById('fLng').value = c.lng;
   linkStatus(c.aprox
-    ? '✓ Coordonate extrase, dar aproximative (centrul hărții). Verifică-le.'
-    : '✓ Coordonate extrase: ' + c.lat + ', ' + c.lng, 'ok');
+    ? '⚠ Coordonate aproximative (pot fi la câteva zeci de metri de casă): ' + c.lat + ', ' + c.lng + '.'
+    : '✓ Coordonate extrase: ' + c.lat + ', ' + c.lng + '.', c.aprox ? 'warn' : 'ok', c);
 }
 
 const LINK_HINT = 'Coordonatele se completează singure din link.';
@@ -385,8 +432,9 @@ async function dinLink(fortat) {
   if (!text || (!fortat && !goale && text === ultimulLink)) return;
   ultimulLink = text;
 
-  const c = coordDinText(text);
+  let c = coordDinText(text);
   if (c && !c.aprox) { punCoord(c); return; }
+  c = ftidDinText(text) || c;
 
   const url = (text.match(/https?:\/\/\S+/i) || [])[0];
   if (!url) {
@@ -404,6 +452,7 @@ async function dinLink(fortat) {
   try {
     const d = await apel({ action: 'resolve', url: url });
     if (document.getElementById('fLink').value.trim() !== text) return;
+    if (Math.abs(d.lat - 37.0625) < 0.001 && Math.abs(d.lng + 95.677068) < 0.001) throw new Error('Scriptul din Google Sheet trebuie actualizat.');
     punCoord(d);
   } catch (e) {
     if (c) { punCoord(c); return; }
