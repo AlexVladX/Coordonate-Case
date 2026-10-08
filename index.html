@@ -108,7 +108,7 @@
   <div class="form-ok" id="formOk"></div>
 </div>
 
-<div class="count" id="countLabel"></div>
+<div class="count"><span id="countLabel"></span><span id="syncLabel"></span></div>
 <div class="list" id="cardList"></div>
 
 <script>
@@ -138,32 +138,74 @@ const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyhPW-z5AwdvJ8XMJywu
 
 const CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTK9Gqn_GzSAwiiml_UeBj6bugILzKLImxmxN5hORWfJ3jsQFxaqkknue_CDu158ywXbvqxKwiB3JO4/pub?output=csv';
 
-function incarcaCsv() {
-  return fetch(CSV_URL)
-    .then(res => res.text())
-    .then(text => {
-      const rows = text.split('\n').slice(1).filter(r => r.trim() !== '');
-      case_ = rows.map(r => {
-        const [id, nume, lat, lng, note] = r.split(',');
-        return { id: Number(id), nume: nume, lat: Number(lat), lng: Number(lng), note: note };
-      });
-      filterCards();
-    });
+/* Copia listei păstrată pe telefon: se afișează imediat la deschidere,
+   apoi se actualizează în fundal când răspunde rețeaua. */
+const CACHE_KEY = 'coordonate-case-cache';
+let cacheData = null;      // momentul ultimei actualizări reușite
+let seIncarca = true;
+
+function citesteCache() {
+  try {
+    const c = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
+    if (c && Array.isArray(c.case)) { case_ = c.case; cacheData = c.t; return true; }
+  } catch (e) {}
+  return false;
 }
 
-function incarca() {
-  if (!SCRIPT_URL) return incarcaCsv();
-  return fetch(SCRIPT_URL)
-    .then(res => res.json())
-    .then(d => {
-      if (!d.ok) throw new Error(d.error);
-      case_ = d.case;
-      filterCards();
-    })
-    .catch(() => incarcaCsv());
+function scrieCache() {
+  cacheData = Date.now();
+  try { localStorage.setItem(CACHE_KEY, JSON.stringify({ t: cacheData, case: case_ })); } catch (e) {}
 }
 
-incarca();
+function setSync(text) { document.getElementById('syncLabel').textContent = text ? ' · ' + text : ''; }
+
+function dataScurta(t) {
+  const d = new Date(t), azi = new Date();
+  const ora = d.toLocaleTimeString('ro-RO', { hour: '2-digit', minute: '2-digit' });
+  return d.toDateString() === azi.toDateString() ? 'azi ' + ora : d.toLocaleDateString('ro-RO', { day: 'numeric', month: 'short' }) + ' ' + ora;
+}
+
+function cuLimita(url) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 25000);
+  return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(timer));
+}
+
+async function dinCsv() {
+  const text = await (await cuLimita(CSV_URL)).text();
+  return text.split('\n').slice(1).filter(r => r.trim() !== '').map(r => {
+    const [id, nume, lat, lng, note] = r.split(',');
+    return { id: Number(id), nume: nume, lat: Number(lat), lng: Number(lng), note: note };
+  });
+}
+
+async function dinScript() {
+  const d = await (await cuLimita(SCRIPT_URL)).json();
+  if (!d.ok) throw new Error(d.error);
+  return d.case;
+}
+
+async function incarca() {
+  const areCache = citesteCache();
+  if (areCache) filterCards();
+  setSync('se actualizează…');
+  try {
+    let lista;
+    if (SCRIPT_URL) {
+      try { lista = await dinScript(); }
+      catch (e) { if (areCache) throw e; lista = await dinCsv(); }
+    } else {
+      lista = await dinCsv();
+    }
+    case_ = lista;
+    scrieCache();
+    setSync('actualizat acum');
+  } catch (e) {
+    setSync(cacheData ? 'fără conexiune, date de ' + dataScurta(cacheData) : 'fără conexiune');
+  }
+  seIncarca = false;
+  filterCards();
+}
 
 /* ================================================ */
 
@@ -281,6 +323,7 @@ async function saveCasa(ev) {
     try {
       const d = await apel({ action: 'add', nume: nume, lat: lat, lng: lng, note: note });
       case_.push(d.casa);
+      scrieCache();
       mesaj = '✓ „' + nume + '” a fost salvată în Google Sheet.';
     } catch (e) {
       showError(e.message);
@@ -315,6 +358,7 @@ async function deleteCasa(id) {
   try {
     await apel({ action: 'delete', id: c.id });
     case_ = case_.filter(x => x !== c);
+    scrieCache();
     showOk('✓ „' + c.nume + '” a fost ștearsă.');
     filterCards();
   } catch (e) {
@@ -368,7 +412,7 @@ function render(list) {
   document.getElementById('countLabel').textContent = 'Se afișează ' + n + ' locați' + (n === 1 ? 'e' : 'i');
 
   if (n === 0) {
-    el.innerHTML = '<div class="no-results">Nicio locație găsită.</div>';
+    el.innerHTML = '<div class="no-results">' + (seIncarca && !toateCasele().length ? 'Se încarcă lista…' : 'Nicio locație găsită.') + '</div>';
     return;
   }
 
@@ -402,6 +446,11 @@ function render(list) {
 }
 
 filterCards();
+incarca();
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
 </script>
 </body>
 </html>
